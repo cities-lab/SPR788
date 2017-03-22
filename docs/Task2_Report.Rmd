@@ -1,0 +1,1578 @@
+---
+title: "SPR 788: Task 2 Model Design and Estimation Report (Updated Draft)"
+author: "Liming Wang"
+date: "03/20/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "../")
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=F)
+options(scipen=100)
+options(digits=3)
+#setwd("~/RSPM_ModeChoice/docs")
+
+if (!require("pacman")) {install.packages("pacman"); library(pacman)}
+# special installation process for printr as it is not available on CRAN
+if (!require("printr")) install.packages('printr', type = 'source', 
+                                         repos = 'http://yihui.name/xran')
+pacman::p_load("gridExtra", "knitr", "moments", "pastecs", "tidyverse",
+               "printr", "scales", "magrittr", "stargazer", "pander",
+               "splines", modelr)
+```
+
+```{r functions, include=FALSE}
+# A function for captioning and referencing images
+fig <- local({
+    i <- 0
+    ref <- list()
+    list(
+        cap=function(refName, text) {
+            i <<- i + 1
+            ref[[refName]] <<- i
+            paste("Figure ", i, ": ", text, sep="")
+        },
+        ref=function(refName) {
+            ref[[refName]]
+        })
+})
+```
+
+<!-- ## Progress -->
+<!-- Since the last TAC meeting, the PSU team has made the following progress: -->
+
+<!-- 1. Incorporated feedback for Task 1 - literature review from the TAC; -->
+<!-- 2. Explored additional data sources, including California Travel Survey, Puget Sound Regional Travel Study, that are feasible alternatives for mode choice modeling if confidential residential location in the 2009 NHTS data would not be available; -->
+<!-- 3. Retrieved and processed the 2009 National Household Travel Survey (NHTS) data and Smart Location Database (SLD);  -->
+<!-- 4. Produced overview and descriptive of NHTS & SLD; -->
+<!-- 5. Specify model structure and estimate models with initial specification. -->
+
+## Introduction
+
+Task 2 of the project is to "select one or more possible model designs for RSPM mode shift, estimate model parameters and evaluate the designs and estimated parameters with sensitivity tests and validation". More specifically, the plan is to select  and estimate one or more possible designs of the mode choice model based on literature review and data exploration in Task 1 and to understand what mode shifts occur as vehicle travel is reduced, incorporating and testing interactions in RSPM.  These approaches build on the existing RSPM module and utilize household and land use inputs and budget constraints already embedded in the RSPM tool. The PSU team will suggest functional form and independent variables for model estimation with associated data sources for estimation and validation. PSU researchers will also identify sensitivity tests to assess the upgraded model with literature elasticities, repeating some of the tests previously calculated by the RSPM to ensure these remain intact, as well as adding tests to evaluate the new functionality. The PSU team will discuss and coordinate with Brian Gregor in the model design and estimation process, as he implements the RSPM common framework, to make sure the design and data format match the latest RSPM modeling framework. ODOT staff shall review and adjust the proposed designs, estimation data and validation data/approach.
+
+The deliverable of Task 2 is a working paper (this document) that describes model designs, data sources, estimation, results of sensitivity tests and validation; documented R scripts used to process and analyze data.
+
+Members of the TAC/OSA contract will review and suggest adjustments to the PSU researchers for model design, estimation data and results, validation data, approach and results; guide the selection of the best model design.
+
+## Data Sources 
+<!--
+## The technical memo will discuss
+
+1). Now that we have NHTS and SLD data, do we need OHAS and California data (this was plan B).
+... and any other data sets needed
+-->
+
+The primary data sources we identified and used for Task 2 are the **2009 National Household Travel Survey (NHTS)** and **2010 EPA Smart Location Database (SLD)**. Additional data sources include TTI's Urban Mobility Report dataset and National Transit Database. We retrieved the 2009 NHTS data with confidential block group level residence location (and Census Tract and ZIP code of workplace location), which is the ideal data set we eyed for modeling mode choice. With the confidential residential block group location, we joined the 2009 NHTS with the 2010 SLD to get a combined dataset of travel information and built environment/urban form variables of households' residential block group.
+
+We also looked into alternative data sources, including the 2012 California Travel Survey (CATS), 2011 Oregon Household Travel and Activity Survey (OHAS), the 2014-2015 Puget Sound Regional Travel Study (PSRTS) and explored the potential to combine these 3 surveys to create a unified data set with diverse coverage.  But with the 2009 NHTS data with confidential residential block group location, there is limited additional benefit of pursuing combining CATS, OHAS and PSRTS for a number of reasons. First, these three data sets were collected in different years, which may create odd effects that are included in the model estimation. Second, since each of the data sets was collected by a different State/agency, the information collected varies and how the variables are measured or coded are likely different, which adds extra work to create a unified data set at the least and may weaken the final models at the worst.
+
+There are two areas that extra data would be still beneficial. One area we wish to have a better handle is the day-to-day variation in mode choice and total demand (for example, the amount of driving measured in vehicle miles traveled), so that we can predict long-term behavior from a daily model. However, NHTS, as well as the three travel surveys above only capture the travel information for one single day. In GreenSTEP, Brian Gregor assumed the stochasticity in household daily VMT model (a linear regression model with transformed VMT as the dependent variable) represents the day-to-day variation in VMT. Such approximation of weekly VMT from daily information may be imperfect. Verification of the relationship between daily and longer term VMT and an explicit model of weekly (or annual) VMT may be necessary. A few potential data sets would be helpful in looking into the relationship. In particular, the 2004 – 2006 Traffic Choices Study by the Puget Sound Regional Council. For a pilot project on congestion-based tolling sponsored by Federal Highway Administration, the study placed GPS data loggers into the vehicles of about 275 households in the Seattle metropolitan area. The project recorded roughly 18 months of trip data (from November 2004 to April 2006) and included more than 400 vehicles. Such long-term data would be helpful to look into the relationship between daily and long term VMT. 
+
+Another potential area we are looking into for improvement is the modeling of price elasticities of travel demand. Brian tested three different methods of capturing price elasticities: income effect, price coefficient and household budget model. There are a number of challenges to get realistic price elasticities, including
+1)	The lack of disaggregate panel data that can be used to study how household travel decisions change over time in response to changes in fuel prices;
+2)	The relatively low historical price of fuel;
+3)	The prospect for future fuel prices that may be several times greater than present prices;
+4)	A lack of research consensus on the magnitude of the effects; and, 
+5)	The difficulty of sorting out short range and long range effects.
+
+Because of these challenges, the first two methods do not have sufficient sensitivity and Brian adopted the household budget model. All the challenges Brian identified above remain for the current project. Using the household budget model as the baseline model, we hope to draw from literature around the world (for example, Graham and Glaister, 2002) on the magnitude of the price elasticities and explore alternative methods of incorporating the elasticities into the new model of travel demand. Tolling studies such as the Puget Sound Traffic Choices Study provide some useful information on the price elasticities of travel demand (even though not from fuel price change). 
+
+## Descriptive Statistics
+<!-- 2). Overview of both the NHTS and SLD data sets, and any other data sets needed.
+-->
+
+### 2009 NHTS
+In addition to surveyed households' socio-demographic characteristics, the 2009 NHTS [@NHTS2009] collected daily trips taken in a 24-hour period, and includes:
+
+* purpose of the trip (work, shopping, etc.);
+* means of transportation used (car, bus, subway, walk, etc.);
+* how long the trip took, i.e., travel time;
+* time of day when the trip took place;
+* day of week when the trip took place; and
+* if a private vehicle trip:
+  * number of people in the vehicle , i.e., vehicle occupancy;
+  * driver characteristics (age, sex, worker status, education level, etc.); and
+  * vehicle attributes (make, model, model year, amount of miles driven in a year).
+
+
+```{r source, include=F, echo=FALSE, warning=FALSE, message=FALSE, cache=T}
+source('code/functions.R')
+source('code/load_data.R')
+source('code/comp_dependencies.R')
+source('code/partition_data.R')
+source('code/est_models.R')
+
+hh.df_file <- "output/intermediate/hh_df.rda"
+hh.df <- load_or_source(hh.df_file, "hh.df")
+hh.df <- compute_dependencies(hh.df)
+
+pp.df_file <- "output/intermediate/pp_df.rda"
+pp.df <- load_or_source(pp.df_file, "pp.df")
+
+dd.df_file <- "output/intermediate/dd_df.rda"
+dd.df <- load_or_source(dd.df_file, "dd.df")
+
+hh.x.mode_dd.df_file <- "output/intermediate/hh.x.mode_dd_df.rda"
+hh.x.mode_dd <- load_or_source(hh.x.mode_dd.df_file, "hh.x.mode_dd")
+
+hh_vv_df_file <- "output/intermediate/hh_vv_df.rda"
+hh_vv <- load_or_source(hh_vv_df_file, "hh_vv")
+
+mm.df <- hh.df %>% 
+  segment_data("metro") %>% 
+  name_list.cols(name_cols=c("metro"))
+```
+
+The 2009 NHTS included `r prettyNum(nrow(hh.df), big.mark=",")` households, `r prettyNum(nrow(pp.df), big.mark=",")` household members and `r prettyNum(nrow(dd.df), big.mark=",")` trips. 
+
+#### Travel Mode Reclassificiation
+
+According to [codebook for G34	TRPTRANS](http://nhts.ornl.gov/tables09/CodebookPage.aspx?id=1084),  we re-classify the modes into 5 categories:
+
+1. Auto Modes
+```{r, echo=FALSE, message=FALSE, warnings=FALSE, results='asis'}
+tabl <- "
+ Code         |  Name
+------------- | ---------
+1  | Car     
+2  | Van
+3  | SUV
+4  | pickup truck
+5  | other truck
+6  | recreational vehicle
+7  | motorcycle
+"
+cat(tabl) # output the table in a format good for HTML/PDF/docx conversion
+```
+
+
+2. Transit Modes
+```{r, echo=FALSE, message=FALSE, warnings=FALSE, results='asis'}
+tabl <- "
+ Code         |  Name
+------------- | ---------
+9  | transit bus
+10 | commuter bus
+11 | school bus
+12 | charter bus
+13 | city to city bus
+14 | Shuttle bus
+15 | Amtrak
+16 | Commuter train
+17 | Subway
+18 | Street car/trolley
+"
+cat(tabl) # output the table in a format good for HTML/PDF/docx conversion
+```
+
+3. Bike
+```{r, echo=FALSE, message=FALSE, warnings=FALSE, results='asis'}
+tabl <- "
+ Code         |  Name
+------------- | ---------
+22  |  bicycle
+"
+cat(tabl) # output the table in a format good for HTML/PDF/docx conversion
+```
+
+4. Walk
+```{r, echo=FALSE, message=FALSE, warnings=FALSE, results='asis'}
+tabl <- "
+ Code         |  Name
+------------- | ---------
+23  |  walk
+"
+cat(tabl) # output the table in a format good for HTML/PDF/docx conversion
+```
+
+5. Other Modes (not being modelled)
+```{r, echo=FALSE, message=FALSE, warnings=FALSE, results='asis'}
+tabl <- "
+ Code         |  Name
+------------- | ---------
+8  | Light electric veh (golf cart)
+19 | taxi cab
+20 | Ferry
+21 | airplanes
+24 | Special transit-people w/disabilitie
+"
+cat(tabl) # output the table in a format good for HTML/PDF/docx conversion
+```
+
+#### Descriptive Statistics
+
+1. Name of selected variables
+```{r variables, echo=FALSE, message=FALSE, warnings=FALSE, results='asis'}
+tabl <- "
+Variable Names | Description
+-------------- | ------------- 
+ANNMILES       | [NHTS] Self-reported annualized mile estimate
+BESTMILE       | [NHTS] Best estimate of annual miles (ORNL)
+TDAYDATE       | [NHTS] Date of Travel Day (YYYYMM)
+TRAVDAY        | [NHTS] Travel day - day of week
+DRVRCNT        | [NHTS] Number of drivers in HH
+HHSIZE         | [NHTS] Count of HH members
+HHVEHCNT       | [NHTS] Count of HH vehicles
+NUMADLT        | [NHTS] Count of adult HHMs at least 18 years old
+TRPMILES       | [NHTS] Calculated Trip distance converted into miles
+TRPTRANS       | [NHTS] Transportation mode used on trip
+TRIPPURP       | [NHTS] General Trip Purpose (Home-Based Purpose types)
+TRVL_MIN       | [NHTS] Derived trip time - minutes
+TRVLCMIN       | [NHTS] Calculated travel time
+DVMT           | [NHTS] Calculated Trip distance (miles) for Driver Trips
+WRKCOUNT       | [NHTS] Number of workers in HH
+LIF_CYC        | [NHTS] Household Life Cycle (Single, Young Couple, Couple with children, Empty Nester)
+Htppopdn       | 
+TOTPOP10_1     | [PT] 2010 Total population within 1 mile buffer of BG centroid
+EMPTOT_2       | [PT] Total employment within 2 mile buffer of BG centroid
+               | [PT] 
+E5_RET10       | [SLD] 2010 Retail employment
+E5_SVC10       | [SLD] 2010 Service employment
+D1D            | [SLD] Gross activity density (employment + HUs) on unprotected land
+D2A_JPHH       | [SLD] Jobs per household 
+D3amm          | [SLD] Network density in terms of facility miles of multi-modal links per square mile
+D3apo          | [SLD] Network density in terms of facility miles of pedestrian-oriented links per square mile
+D4a            | [SLD] Distance from population weighted centroid to nearest transit stop (meters)
+D4c            | [SLD] Aggregate frequency of transit service within 0.25 miles of block group boundary per hour during evening peak period
+D4d            | [SLD] Aggregate frequency of transit service (D4c) per square mile
+Fwylnmicap     | [TTI] 2010 Urbanized Area freeway lane miles per capita
+Tranmilescap   | [NTD] 2009 Urbanized Area annual vehicle revenue miles per capita
+"
+#Fwylnmi        | [TTI] 2010 Urbanized Area freeway lane miles
+#UZAASLM        | [TTI] 2010 Urbanized Area arterial street lane miles
+#UZAASLMPC      | [TTI] 2010 Urbanized Area arterial street Lane miles per capita
+#Tranmiles      | [NTD] 2009 Urbanized Area annual vehicle revenue miles
+#UZAAVRH        | [NTD] 2009 Urbanized Area annual vehicle revenue hours
+#UZAAVRMPC      | [NTD] 2009 Urbanized Area annual vehicle revenue hours per capita
+
+cat(tabl) # output the table in a format good for HTML/PDF/docx conversion
+```
+
+<!-- 2. Summary statistics of select household characteristics -->
+```{r, echo=F}
+#stat.desc(hh.df %>% dplyr::select(-c(HOUSEID, TRAVDAY, TDAYDATE)))
+```
+
+<!-- 3. Summary statistics of select trip characteristics -->
+```{r, echo=F}
+#stat.desc(dd.df %>% dplyr::select(-c(HOUSEID, TRPTRANS, TRIPPURP, TRVLCMIN, mode, VEHID)))
+```
+
+4. Trip frequencies by mode (unweighted)
+```{r, echo=FALSE}
+dd.df %>% group_by(mode) %>% 
+  summarize(n=n()) %>% 
+  mutate('%'=100 * n/sum(n)) %>% 
+  arrange(desc(n))
+```
+
+5. Shares of trips by trip purpose and mode
+```{r, echo=FALSE}
+dd.df %>% group_by(TRIPPURP) %>% 
+  mutate(N=n()) %>% 
+  group_by(mode, add=TRUE) %>% 
+  summarize(n=n(), `%`=n/first(N)*100) %>% 
+  ungroup() %>% 
+  arrange(TRIPPURP, mode)
+```
+
+```{r trippurp.v.trptrans, echo=FALSE, fig.cap=fig$cap("trippurp.v.trptrans", "Shares of trips by trip purpose and mode")}
+ggplot(dd.df, aes(x=TRIPPURP, fill=mode)) +  
+        geom_bar(aes(y=(..count..)/sum(..count..))) + 
+        scale_y_continuous(labels=percent) + labs(y="")
+```
+
+6. The distribution of raw trip distance (miles) is very skewed 
+```{r, echo=FALSE, warning=FALSE}
+phist.td <- histogram.pct(dd.df$TRPMILES, x.lab="TRPMILES")
+phist.lntd <- histogram.pct(log(dd.df$TRPMILES), x.lab="ln(TRPMILES)")
+phist.powtd <- histogram.pct(dd.df$TRPMILES^0.18, x.lab=expression(TRPMILES^0.18))
+grid.arrange(phist.td, phist.lntd, phist.powtd, ncol=3)
+```
+
+7. Summary of trip distance by mode
+```{r, echo=FALSE}
+dd.df %>% #filter(TRPMILES<trpmiles.cutoff) %>% ## arbitrary cutoff
+  group_by(mode) %>%
+  summarize(n=n(), 
+            `5%`=quantile(TRPMILES, probs=0.05),
+            `25%`=quantile(TRPMILES, probs=0.25),
+            `50%`=quantile(TRPMILES, probs=0.5),
+            `75%`=quantile(TRPMILES, probs=0.75),
+            `95%`=quantile(TRPMILES, probs=0.95),
+            `99%`=quantile(TRPMILES, probs=0.99),
+            max =max(TRPMILES),
+            mean=mean(TRPMILES), 
+            sd=sd(TRPMILES))
+```
+
+8. Exclude trips by vehicles w/ commercial license plates and with distance above 99 percentile
+```{r, include=FALSE}
+dd.df %>%
+  group_by(mode) %>%
+  summarize(n=n()) %>% mutate('%'=100*n/sum(n))
+```
+Given the skewedness of trip distance, a cutoff of 99-percentile of trip distance for each mode is used. Results below are after applying the cutoff.
+
+```{r, echo=FALSE}
+#hh.df
+```
+
+9. Descriptives of total household travel distance (miles) by mode used:
+```{r, echo=FALSE}
+
+hh.x.mode_dd %>% group_by(mode) %>%
+  summarize(n=n(), 
+            `5%`=quantile(td.miles, probs=0.05),
+            `25%`=quantile(td.miles, probs=0.25),
+            `50%`=quantile(td.miles, probs=0.5),
+            `75%`=quantile(td.miles, probs=0.75),
+            `95%`=quantile(td.miles, probs=0.95),
+            `99%`=quantile(td.miles, probs=0.99),
+            max=max(td.miles),
+            mean=mean(td.miles), 
+            sd=sd(td.miles))
+```
+
+10. Descriptives of household travel time (minutes) by mode used:
+```{r, echo=F}
+hh.x.mode_dd %>% group_by(mode) %>%
+  summarize(n=n(), 
+            `5%`=quantile(tt.mins, probs=0.05),
+            `25%`=quantile(tt.mins, probs=0.25),
+            `50%`=quantile(tt.mins, probs=0.5),
+            `75%`=quantile(tt.mins, probs=0.75),
+            `95%`=quantile(tt.mins, probs=0.95),
+            `99%`=quantile(tt.mins, probs=0.99),
+            max=max(tt.mins),
+            mean=mean(tt.mins), 
+            sd=sd(tt.mins))
+```
+
+11. Boxplot of household travel distance (mile) and time (minutes) by mode
+```{r, echo=F, warning=F}
+plot1 <- qplot(mode, td.miles, data=hh.x.mode_dd, geom="boxplot")
+plot2 <- qplot(mode, tt.mins, data=hh.x.mode_dd, geom="boxplot")
+grid.arrange(plot1, plot2, ncol=2) 
+```
+
+12. Survey day VMT and Annual vehicle miles 
+  - DVMT - Calculated Trip distance (miles) for Auto Trips
+ 
+  - ANNMILES - Self-reported annualized mile estimate; 
+  
+  - BESTMILE -	Best estimate of annual miles (by ORNL)
+  
+```{r, echo=F, warning=F}
+phist.dvmt <- histogram.pct(hh.df$DVMT, x.lab="Survey Day VMT")
+phist.powdvmt <- histogram.pct((hh.df$DVMT)^0.18, x.lab=expression(paste("Survey Day ", VMT^0.18)))
+#phist.avmt <- histogram.pct(hh_vv$ANNMILES, x.lab="ANNMILES")
+phist.aadvmt <- histogram.pct(hh_vv$BESTMILE/365, x.lab="AADVMT")
+phist.lnaadvmt <- histogram.pct(log1p(hh_vv$BESTMILE/365), x.lab="ln(AADVMT)")
+phist.powaadvmt <- histogram.pct((hh_vv$BESTMILE/365)^0.38, x.lab=expression(AADVMT^0.38))
+grid.arrange(phist.dvmt, phist.powdvmt, phist.aadvmt, phist.powaadvmt, phist.lnaadvmt, ncol=2)
+
+#VMT variation by travel day
+# hh.df %>% 
+#   group_by(TRAVDAY) %>% 
+#   summarize(n=n(), 
+#             min=min(DVMT, na.rm=T),
+#             `5%`=quantile(DVMT, probs=0.05),
+#             `25%`=quantile(DVMT, probs=0.25),
+#             `50%`=quantile(DVMT, probs=0.5),
+#             `75%`=quantile(DVMT, probs=0.75),
+#             `95%`=quantile(DVMT, probs=0.95),
+#             `99%`=quantile(DVMT, probs=0.99),
+#             max=max(DVMT, na.rm=T),
+#             mean=mean(DVMT, na.rm=T), 
+#             sd=sd(DVMT, na.rm=T))
+# 
+# hh.df %>% 
+#   group_by(TDAYDATE) %>% 
+#   summarize(n=n(), 
+#             min=min(DVMT, na.rm=T),
+#             `5%`=quantile(DVMT, probs=0.05),
+#             `25%`=quantile(DVMT, probs=0.25),
+#             `50%`=quantile(DVMT, probs=0.5),
+#             `75%`=quantile(DVMT, probs=0.75),
+#             `95%`=quantile(DVMT, probs=0.95),
+#             `99%`=quantile(DVMT, probs=0.99),
+#             max=max(DVMT, na.rm=T),
+#             mean=mean(DVMT, na.rm=T), 
+#             sd=sd(DVMT, na.rm=T))
+
+plot1 <- qplot(TRAVDAY, DVMT, data=hh.df, geom="boxplot")
+plot2 <- qplot(TDAYDATE, DVMT, data=hh.df, geom="boxplot")
+grid.arrange(plot1, plot2, ncol=2) 
+
+```
+
+## SmartLocation Database (SLD)
+The Smart Location Database [@Ramsey2014] is a nationwide geographic data resource for measuring location efficiency. It includes more than 90 attributes summarizing characteristics such as housing density, diversity of land use, neighborhood design, destination accessibility, transit service, employment, and demographics. Most attributes are available for every census block group in the United States. The variables in SLD are largely organized according to the 5D built environment measures: Density, Diversity, Design, Transit, Destination, in addition to demographics and employment. A complete list of the variables can be found [here](https://www.epa.gov/sites/production/files/2014-03/documents/sld_userguide.pdf).
+
+The confidential NHTS data contain Census Block Group information of households' residence Census block group (2010 geography), which is joined with SLD to retrieve land use features for these locations. Land use information in SLD provide a rich set of factors that are documented in existing research literature to have influence on households' travel behavior including mode choices and travel distance.
+
+All households in the 2009 NHTS data have a matched block group in the SLD.
+```{r, echo=F}
+#hh.sld %>% group_by(`with a match in SLD`=!is.na(SFIPS)) %>% summarize(n=n()) %>% mutate('%'=100 * n/sum(n))
+```
+
+<!--
+3). Discuss functional forms and how they will be derived from the data.
+4). Discuss how RSPM currently handles vehicle and non-vehicle VMT. How does that affect what model form we’ll use?
+-->
+
+## Place Types
+
+Place types are land uses categories that are useful for describing development patterns and their relationship to human behavior (e.g. travel behavior) and well being (e.g. health) (Gregor, 2016). In the RSPM mode shift project, we use place types as a means to simplify the work for RSPM users when they create scenarios.
+
+This project adopts the work by Brian Gregor and others and establishes categories over the following 3 dimensions: 
+
+* (flag) Location Type: categorizes the the general urban context of the place (e.g. large urbanized area, small city, etc.).
+   1. Urbanized: A contiguous area of urban development which has a large population. Criteria: population within 5 miles >= 30,000 and population within 1 Mile >= 1,000;
+   2. Urban Near Urbanized: Urban development (e.g. cities, towns, communities) located in the fringe of an urbanized area but are not part of the contiguous urbanized area. Criteria: Population within 15 Miles >= 60,000 and Population within 2 Mile >= 2,000;
+   3. Rural Near Urbanized: Urban development not located in the fringe of an urbanized area. Criteria: Population within 15 Miles >= 60,000 and Population within 2 Mile < 2,000
+   4. Urban Not Near Urbanized: Urban development not located in the fringe of an urbanized area. Criteria: Population within 15 Miles <= 60,000 and Population within 2 Mile >= 2,000
+   5. Rural Not Near Urbanized: Rural development not located in the fringe of an urbanized area. Criteria: Population within 15 Miles <= 60,000 and Population within 2 Mile <= 2,000
+
+* Area Type: categorizes the spatial relationship of urban places to the urban center (e.g. urban center, suburbs, etc.).
+   1. Regional Center: Places within urbanized areas that have high levels of population accessibility to jobs and developed at densities and having transportation networks that would allow a substantial portion of the population to get to jobs or other activities by non-auto transport modes. Criteria: if ACCESS is high, and DENSITY is medium or high, and DESIGN is high;
+   2. Close In Community: Places within urbanized areas and other urban areas that are located near regional centers or are places with relatively high levels of population accessibility to jobs within urban areas that are not urbanized. Criteria: if ACCESS is high, and DENSITY is medium or high, but DESIGN is not high, or if ACCESS is high and DENSITY is low, or if ACCESS is medium and DENSITY is medium or high; 
+   3. Suburb/Town: Places in urbanized areas, smaller urban areas, and towns that have lower population accessibility to jobs. Criteria: if ACCESS is high but DENSITY is very low, or if ACCESS is very low or low and DENSITY is not very low; 
+   4. Low Density/Rural: Low density places with low job accessibiity located primarily in rural areas, but may occassionally be found in large vacant tracts in urbanized areas. Criteria: in all other cases.
+
+* Development Type: categorizes the general character of land uses occupying the place (e.g. residential, employment, mixed, etc.)
+   1. Low Density/Rural: These are places that have very low density development in urban or rural areas. In urban areas these can include large tracts of park land or greenfields. Criteria: if DENSITY is very low; 
+   2. Employment: These are places where there are more jobs than households and do not qualify as mixed-use as described below. Criteria: if not Mixed and Diversity1 is greater than 1 (i.e. more jobs than households); 
+   3. Residential: These are places where there are more households than jobs and do not qualify as mixed-use as described below. Criteria: if not Mixed and Diversity1 is less than 1 (i.e. more households than jobs); 
+   4. Mixed: These are places where there are a mixture of jobs and households that meet a specified ratio of the two uses. Criteria: if DIVERSITY is high and DENSITY is medium or high and DESIGN is medium or high; 
+   5. Mixed High: These are places that are mixed and have relatively high densities. Critera: if Mixed and DENSITY is high and DESIGN is high; 
+   6. Transit-Oriented Development (TOD): These are places that are mixed, have relatively high densities, and have relatively high levels of public transit service. Criteria: if Mixed High and TRANSIT is high, or if Employment and TRANSIT is high and DESIGN is high.
+
+By default, the accessibility measure ``ACCESS = (2 * EMPTOT_2 * TOTPOP10_5) / 10000 * (EMPTOT_2 + TOTPOP10_5)``, where ``EMPTOT_2`` is employment within 2-mile radius, and ``TOTPOP10_5`` is total 2010 population within 5-mile radius. The break points for very low, low, medium, and high are 0.1, 0.5 and 2, respectively.
+
+The Density level uses D1D variable in SLD - gross activity density (employment + HUs) on unprotected land (per acre) - with break points of 0.1, 1, and 5.
+
+The Design measure is based on two variables from the SLD: D3amm variable (network density in terms of multimodal links per square mile) and D3apo variable (network density in terms of facility miles of pedestrian-oriented links per square mile). The default break points for D3amm are 1.3, 2.5, and 3.3, while those for D3apo are 12.5, 15.6, and 20. The final value of the Design measure is the maximum value of the two. For example, if the D3amm value is low and D3apo value is medium, the final value of the design measure would be medium.
+
+Diversity Level is a measure of the mixing of jobs and households in the block group. It is based on measures in the SLD: ``D2A_JPHH`` (ratio of jobs to households in the block group and the ratio of retail and service jobs to the number of households ``(E5_RET10 + E5_SVC10)/HH``. 
+
+<!-- > Question: The interface for setting threshold levels for establishing categories for the Diversity1 and Diversity2 variables is different than for the other variables because these variables are ratios. For example, there could be the same amount of diversity if the Diversity1 measure is 2 or 1/2: twice as many jobs as households or twice as many households as jobs. For each level threshold (low, medium, high), minimum and maximum threshold values are established. The ranges must be nesting. This means that the medium range must be within the bounds of the low range and the high range much be within the bounds of the medium range. It is up to the user to assure that this is the case. The application does not check the user's inputs in this respect. The final diversity categorical variable combines the results of the Diversity1 and Diversity2 categorical variables by taking the maximum of the values. However, if the density of the block group is very low, the diversity variable is very low as well. -->
+
+Transit Level is a measure of the level of transit service derived from the SLD D4c (aggregate frequency of transit service within 0.25 miles of block group boundary per hour during evening peak period). The threshold values for the 4 levels are 1, 20, and 150.
+
+<!-- Question: How is "Mixed" calculated? -->
+
+<!-- > Note that the "Mixed" type is calculated as an intermediate variable and that several other types are calculated using it. Similarly the "Mixed High" type is used to calculate the "TOD" type. -->
+
+Based on discussion with the TAC, in particular, Brian and Tara, we primilarily use the place types as an intermediate step to faciliate scenario creation, but not as independent variables directly included in model specification. 
+
+## Model Structures
+
+### Current GreenSTEP DVMT models
+GreenSTEP focuses on Daily Vehicle Mile Travel (VMT) by drivers in its household travel model and does not explicitly models non-driving travel (for example, by transit or non-motorized modes), except for diversion of short-distance trips to bike. The current household travel model in GreenSTEP has two sequential (conditional) model: a binary model of whether a household will have non-zero VMT and a regression model of the actual VMT for households with non-zero VMT. Such a model structure provides a good balance between behavioral realism and simplicity and performance:
+
+1. ZeroDVMT model
+
+$P(Daily VMT==0) = logit(DrvAgePop + LogIncome + Htppopdn + Age65Plus + Hhvehcnt + ZeroVeh + Tranmilescap + Urban:Tranmilescap)$, and
+
+```{r}
+fmlas <- list(    metro=~glm(ZeroDVMT ~ DrvAgePop + LogIncome + HTPPOPDN + Age65Plus + HHVEHCNT +
+                               ZeroVeh + Tranmilescap, 
+                              data=., na.action=na.exclude, family=binomial),
+              non_metro=~glm(ZeroDVMT ~ DrvAgePop + LogIncome + HTPPOPDN + Age65Plus + HHVEHCNT +
+                               ZeroVeh, 
+                              data=., na.action=na.exclude, family=binomial))
+
+res.gs_0dvmt <- mm.df %>%
+  add_formulas(fmlas, colname="formula") %>% 
+  mutate(model = map2(train, formula, est_model),
+         #df.model_df = map2(model, train, get_all_vars),
+         #preds = map2(df.model_df, model, modelr::add_predictions),
+         preds = map2(model, test, predict, type="response"),
+         #model = map(model, strip_model),
+         auc = map2_dbl(preds, map(test, resample_get, col_name="ZeroDVMT"), calc_auc),
+         pseudo.r2 = map_dbl(model, calc_pseudo.r2)
+         ) %>%
+  dplyr::select(-c(test, train)) %>% 
+  I() #name_list.cols(name_col="metro")
+
+res.gs_0dvmt$post_func <- list(function(p) 1 - rbinom(p, 1, p))
+
+#res.gs_0dvmt$model %>% map(pp.fit)
+res.gs_0dvmt$model %>% map(summary)
+
+#res.gs_0dvmt$model %>% map_df(broom::glance)
+```
+```{r, echo=FALSE}
+res.gs_0dvmt %>% #dplyr::select(-c(model, formula, preds, .id)) %>% 
+  group_by(metro) %>% 
+  summarize(auc=mean(auc),
+            pseudo.r2=mean(pseudo.r2))
+```
+
+2. DVMT model
+
+$(Daily VMT)^{0.18} = lm(Census\_r + LogIncome + Htppopdn + Hhvehcnt + ZeroVeh + Tranmilescap + Fwylnmicap + DrvAgePop + Age65Plus + Urban + Htppopdn:Tranmilescap)$
+
+```{r, echo=FALSE}
+#hh.df %<>% mutate(powVMT=DVMT^0.18)
+fmlas <- list(    metro=~lm(I(DVMT^0.18)~CENSUS_R + LogIncome + HTPPOPDN + HHVEHCNT + ZeroVeh + Tranmilescap +
+                              Fwylnmicap + DrvAgePop + Age65Plus + HTPPOPDN:Tranmilescap, 
+                              data = ., subset=DVMT>0),
+              non_metro=~lm(I(DVMT^0.18) ~ CENSUS_R + LogIncome + HTPPOPDN + HHVEHCNT + ZeroVeh + 
+                              DrvAgePop + Age65Plus, 
+                            data = ., subset=DVMT>0))
+
+inv_fun <- function(x, pow=0.18) x^(1/pow)
+  
+res.gs_pwdvmt <- mm.df %>%
+  add_formulas(fmlas) %>% 
+  mutate(#train = map(train, ~resample_filter(.x, DVMT<quantile(DVMT, .99, na.rm=T))),
+         #test = map(test, ~resample_filter(.x, DVMT<quantile(DVMT, .99, na.rm=T))),
+         model = map2(train, formula, est_model),
+         #bias.adj = map_dbl(model, calc_nlbias.adj, func=inv_fun),
+         bias.adj = 1,
+         preds = map2(model, test, predict, type="response"),
+         preds = map(preds, inv_fun),
+         preds = map2(preds, bias.adj, `*`),
+         #model = map(model, strip_model),
+         rmse = map2_dbl(preds, map(test, resample_get, col_name="DVMT"), calc_rmse),
+         r.squared = map_dbl(map(model, summary), "r.squared")
+         ) %>%
+  dplyr::select(-c(test, train)) %>% 
+  I() #name_list.cols()
+
+res.gs_pwdvmt$post_func <- list(function(y) y^(1/0.18))
+
+#res.gs_pwdvmt$model %>% map(pp.fit)
+res.gs_pwdvmt$model %>% map(summary)
+```
+
+```{r, echo=FALSE, results='asis'}
+res.gs_pwdvmt %>% #dplyr::select(-c(model, formula, preds, .id)) %>% 
+  group_by(metro) %>% 
+  summarize(rmse=mean(rmse),
+            r.squared=mean(r.squared))
+```
+
+3. Combined model
+```{r}
+test <- mm.df %>% transmute(metro=metro, 
+                            HOUSEID=map(test, resample_get, col_name="HOUSEID"),
+                            DVMT=map(test, resample_get, col_name="DVMT"))
+test_preds <- test %>% 
+  left_join(res.gs_0dvmt %>% dplyr::select(metro, preds),  by="metro") %>% 
+  left_join(res.gs_pwdvmt %>% dplyr::select(metro, preds), by="metro", suffix=c(".1", ".2")) %>% 
+  unnest()
+
+test_preds %>% group_by(metro) %>% 
+  mutate(ZeroDVMT = 1 - rbinom(n(), 1, preds.1),
+         DVMT.pred = preds.2 * ZeroDVMT) %>% 
+  summarize(rmse=rmse(DVMT.pred, DVMT))
+```
+
+Another related model in GreenSTEP is the household budget model that captures the price elasticity of travel. The budget approach to modeling is based on the perspective that households make their travel decisions within money and time budget constraints. According to Brian's research on historical consumer expenditure survey data, household spending on gasoline and other variable costs is done within a household transportation budget that is relatively stable, as households shift expenses between transportation budget categories when gasoline prices fluctuate. Households will necessarily reduce their travel in direct proportion to the cost increase only when fuel prices or other variable costs increase to the point where it is no longer possible to shift money from other parts of the transportation budget [@gregor]. Brian assumes the transition between inelastic and elastic behavior will not be abrupt unless there is little time for the household to recognize the impact of the cost increases on the budget or respond to the cost increases. If the changes are more gradual, the transition will be less abrupt. Given the focus of GreenSTEP/RSPM on long term forecasting, we would only need to model long run elasticities.
+
+### Proposed New Models
+
+#### AADVMT Model (Power-transformed linear regression model)
+
+Instead of modeling DVMT and then approximating annual VMT from it, an alternative is to directly model annual average daily VMT (AADVMT). Both 2001 and 2009 NHTS contain annual mile estimates provided by ORNL, from which we can derive AADVMT.
+
+ln(AADVMT) = f(HH variables, 5D variables)
+
+```{r, include=F}
+## truncate mm.df based on AADVMT between (0, 99) percentile
+aadvmt_mm.df <- mm.df %>%
+  mutate(train = map(train, ~resample_filter(.x, AADVMT<quantile(AADVMT, .99, na.rm=T))),
+         test = map(test, ~resample_filter(.x, AADVMT<quantile(AADVMT, .99, na.rm=T))))
+```
+
+1. Estimated Parameters
+
+```{r, echo=F}
+fmlas <- list(metro=~lm(I(AADVMT^0.38) ~ HHSIZE+WRKCOUNT+LogIncome+Age65Plus+ns(log1p(VehPerDriver), 3) +
+                          log1p(TRPOPDEN)+log1p(EMPTOT_5)+Tranmilescap+Tranmilescap:D4c+D1B+
+                          D3bpo4+D4b050+D5cr, data= .),
+              non_metro=~lm(I(AADVMT^0.38) ~ 
+                              DrvAgePop+HHSIZE+WRKCOUNT+CENSUS_R+LogIncome+Age65Plus+ns(log1p(VehPerDriver), 3)+
+                              log1p(TRPOPDEN)+log1p(EMPTOT_5)+D1B+D2A_EPHHM+D1B:D2A_EPHHM+D5ar, data= .))
+
+inv_fun <- function(x, pow=0.38) x^(1/pow)
+
+aadvmt_lm <- aadvmt_mm.df %>%
+  add_formulas(fmlas, colname="formula") %>%
+  mutate(model = map2(train, formula, est_model),
+         preds=map2(model, test, predict, type="response"),
+         preds=map(preds, inv_fun),
+         rmse = map2_dbl(preds, map(test, resample_get, col_name="AADVMT"), calc_rmse),
+         r.squared = map_dbl(map(model, summary), "r.squared")
+  ) %>%
+  dplyr::select(-c(test, train)) %>%
+  I() #name_list.cols(name_col=c("metro", ".id"))
+
+aadvmt_lm$model %>% map(summary)
+```
+
+2. Validation
+
+```{r, echo=FALSE, results='asis'}
+aadvmt_lm %>% #dplyr::select(-c(model, formula, preds, .id)) %>% 
+  group_by(metro) %>% 
+  summarize(rmse=mean(rmse),
+            r.squared=mean(r.squared))
+```
+
+3. Sensitivity
+```{r}
+#plot_diagnostics(res.gs_0dvmt)
+out <- test_sensitivity(hh.df, x_col="VehPerDriver", model.df=aadvmt_lm, segment_col="metro", inv_fun=inv_fun)
+out <- test_sensitivity(hh.df, x_col="LogIncome", model.df=aadvmt_lm, segment_col="metro", inv_fun=inv_fun)
+out <- test_sensitivity(hh.df, x_col="D1B", model.df=aadvmt_lm, segment_col="metro", inv_fun=inv_fun)
+out <- test_sensitivity(hh.df, x_col="TRPOPDEN", model.df=aadvmt_lm, segment_col="metro", inv_fun=inv_fun)
+out <- test_sensitivity(hh.df, x_col="Tranmilescap", model.df=aadvmt_lm, segment_col="metro", segment="metro", inv_fun=inv_fun)
+```
+
+#### AADVMT Model (Hurdle model)
+
+1. Estimated Parameters
+
+```{r}
+
+fmlas <- list(    metro=~pscl::hurdle(AADVMT.int ~ HHSIZE+WRKCOUNT+CENSUS_R+LogIncome+Age65Plus + ns(log1p(VehPerDriver), 3) + 
+                                log1p(EMPTOT_5)+D1D+D1B:D2A_EPHHM+Tranmilescap+Tranmilescap:D4c+
+                                D3bpo4+D5cr+log1p(D5ar) | HHSIZE+WRKCOUNT+LogIncome+Age65Plus + ns(log1p(VehPerDriver), 3) + 
+                                log1p(TRPOPDEN)+D1D+D1B:D2A_EPHHM, 
+                              data=., na.action=na.omit, dist = "negbin"),
+              non_metro=~pscl::hurdle(AADVMT.int ~ HHSIZE+WRKCOUNT+CENSUS_R+LogIncome+Age65Plus+ns(log1p(VehPerDriver), 3)+ 
+                              log1p(TRPOPDEN)+log1p(EMPTOT_5)+D1D+D1B:D2A_EPHHM+log1p(D5ar) | 
+                                WRKCOUNT+CENSUS_R+LogIncome+Age65Plus+ns(log1p(VehPerDriver), 3) + 
+                              log1p(EMPTOT_5)+D1B:D2A_EPHHM+D5cr, 
+                                  data=., na.action=na.omit, dist = "negbin"))
+
+aadvmt_hdl <- aadvmt_mm.df %>%
+  add_formulas(fmlas) %>% 
+  mutate(model = map2(train, formula, est_model),
+         preds = map2(model, test, predict, type="response"),
+         pseudo.r2 = map_dbl(model, calc_pseudo.r2),
+         rmse = map2_dbl(preds, map(test, resample_get, col_name="AADVMT"), calc_rmse)
+         ) %>%
+  dplyr::select(-c(test, train)) %>% 
+  I() #name_list.cols()
+
+aadvmt_hdl$model %>% map(summary)
+```
+
+2. Model goodness-of-fit and Validation
+
+```{r}
+aadvmt_hdl %>% #dplyr::select(-c(model, preds))
+  group_by(metro) %>% 
+  summarize(rmse=mean(rmse),
+            pseudo.r2=mean(pseudo.r2))
+```
+
+3. Sensitivity Tests
+
+```{r}
+out <- test_sensitivity(hh.df, x_col="VehPerDriver", model.df=aadvmt_hdl, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="LogIncome", model.df=aadvmt_hdl, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="D1B", model.df=aadvmt_hdl, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="TRPOPDEN", model.df=aadvmt_hdl, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="Tranmilescap", model.df=aadvmt_hdl, segment_col="metro", segment="metro")
+```
+
+The AADVMT hurdle model adds more complexity yet brings little benefits in terms of prediction accuracies (rmse) or sensitivities, thus the AADVMT power-transformed model is preferred.
+
+#### Person Miles Traveled by Mode Models
+
+###### Transit Miles Traveled Model (hurdle model)
+
+```{r, include=F}
+## truncate mm.df based on Transit PMT < 99 percentile
+tpmt_mm.df <- mm.df %>%
+  mutate(train = map(train, ~resample_filter(.x, td.miles.Transit < quantile(td.miles.Transit, .99, na.rm=T))),
+         test = map(test,   ~resample_filter(.x, td.miles.Transit < quantile(td.miles.Transit, .99, na.rm=T))))
+```
+
+```{r}
+int_round <- function(x) as.integer(round(x))
+
+plot_df <- tpmt_mm.df %>%
+  transmute(metro, 
+            dpmt=map(train, resample_get, col_name="td.miles.Transit"),
+            dpmt_int=map(dpmt, int_round),
+            pow_dpmt=map(dpmt, function(x) x^0.10)) %>% 
+  unnest()
+ggplot(plot_df, aes(x=pow_dpmt)) +  
+    geom_histogram(aes(y=(..count..)/sum(..count..))) + 
+    scale_y_continuous(labels=percent) + 
+    #scale_x_log10() + 
+    labs(y="", x="DPMT (Transit)") +
+    facet_wrap("metro")
+```
+
+1. Estimated Parameters
+
+- counterintuitive coefficients D1D, D2A_EPHHM
+
+```{r}
+fmlas <- list(metro    =~pscl::hurdle(int_round(td.miles.Transit) ~ log1p(VehPerDriver)+HHSIZE+WRKCOUNT+LIF_CYC+
+                                  Age0to14+LogIncome+D1D+D2A_EPHHM+Fwylnmicap+Tranmilescap+D4c | 
+                                  AADVMT+VehPerDriver+HHSIZE+WRKCOUNT+LIF_CYC+Age0to14+D1D+D3bmm4+
+                                  Fwylnmicap+Tranmilescap:D4c+LogIncome, 
+                          data=.),
+              non_metro=~pscl::hurdle(int_round(td.miles.Transit) ~  log1p(VehPerDriver)+HHSIZE+WRKCOUNT+LIF_CYC+
+                                  LogIncome+UZAPOPDEN+D2A_EPHHM | 
+                                  AADVMT+VehPerDriver+HHSIZE+WRKCOUNT+LIF_CYC+Age0to14+Age65Plus+
+                                  LogIncome+D3apo+WRKCOUNT+CENSUS_R,
+                              data=., ))
+
+#inv_fun <- function(x, pow=0.10) x^(1/pow)
+#inv_fun <- function(x) exp(x)
+
+tpmt_hdl <- tpmt_mm.df %>%
+    add_formulas(fmlas) %>%
+    mutate(
+      model = map2(train, formula, est_model),
+      model0 = map2(model, train, ~update(.x, . ~ 1, data=.y)), # constant only model for pseudo.r2 calc
+      preds = map2(model, test, predict, type="response"),
+      pseudo.r2 = map2_dbl(model, model0, ~1-logLik(.x)/logLik(.y)),
+      #nrmse = map2_dbl(preds, map(test, resample_get, col_name="td.miles.Transit"), calc_nrmse),
+      rmse = map2_dbl(preds, map(test, resample_get, col_name="td.miles.Transit"), calc_rmse)
+      
+    ) %>%
+    dplyr::select(-c(test, train)) %>%
+    I() #name_list.cols()
+  
+tpmt_hdl$model %>% map(summary)
+```
+
+2. Model goodness-of-fit and Validation
+```{r}
+goodness <- tpmt_hdl %>%
+            dplyr::select(-c(model, preds))%>%
+            group_by(metro) %>%
+            summarize(rmse=mean(rmse),
+                      #nrmse=mean(nrmse),
+                      pseudo.r2=mean(pseudo.r2)) 
+goodness
+```
+
+3. sensitivity
+```{r, message=F}
+ out <- test_sensitivity(hh.df, x_col="HHSIZE", model.df=tpmt_hdl, segment_col="metro")
+ out <- test_sensitivity(hh.df, x_col="VehPerDriver", model.df=tpmt_hdl, segment_col="metro")
+ out <- test_sensitivity(hh.df, x_col="D1D", model.df=tpmt_hdl, segment_col="metro")
+ out <- test_sensitivity(hh.df, x_col="LogIncome", model.df=tpmt_hdl, segment_col="metro")
+ out <- test_sensitivity(hh.df, x_col="Tranmilescap", model.df=tpmt_hdl, segment_col="metro", segment="metro")
+```
+
+###### Walk Miles Traveled Model (hurdle model)
+
+```{r, include=F}
+## truncate mm.df based on Bike PMT < 99 percentile
+wpmt_mm.df <- mm.df %>%
+  mutate(train = map(train, ~resample_filter(.x, td.miles.Walk < quantile(td.miles.Walk, .99, na.rm=T))),
+         test = map(test,   ~resample_filter(.x, td.miles.Walk < quantile(td.miles.Walk, .99, na.rm=T))))
+```
+
+```{r}
+int_round <- function(x) as.integer(round(x))
+
+plot_df <- wpmt_mm.df %>%
+  transmute(metro, 
+            dpmt=map(train, resample_get, col_name="td.miles.Walk"),
+            dpmt_int=map(dpmt, int_round),
+            pow_dpmt=map(dpmt, function(x) x^0.10)) %>% 
+  unnest()
+ggplot(plot_df, aes(x=dpmt_int)) +  
+    geom_histogram(aes(y=(..count..)/sum(..count..))) + 
+    scale_y_continuous(labels=percent) + 
+    #scale_x_log10() + 
+    labs(y="", x="DPMT (Walk)") +
+    facet_wrap("metro")
+```
+
+1. Estimated Parameters
+
+- counterintuitive coefficients AADVMT
+
+```{r}
+fmlas <- list(metro    =~pscl::hurdle(int_round(td.miles.Walk) ~ VehPerDriver+HHSIZE+LIF_CYC+Age0to14+
+                                  D3bpo4 + Fwylnmicap+ LogIncome | 
+                                  AADVMT + VehPerDriver+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM + D3bmm4 + D3bpo4 +
+                                  log1p(D5ar) + WRKCOUNT + Fwylnmicap + Tranmilescap + LogIncome + D3apo + D4c,
+                          data=.),
+              non_metro=~pscl::hurdle(int_round(td.miles.Walk) ~  HHSIZE+LIF_CYC+D3apo + LogIncome | 
+                                  AADVMT + VehPerDriver+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM  +
+                                  WRKCOUNT + LogIncome + D3apo,
+                              data=., ))
+
+#inv_fun <- function(x, pow=0.10) x^(1/pow)
+#inv_fun <- function(x) exp(x)
+
+wpmt_hdl <- wpmt_mm.df %>%
+    add_formulas(fmlas) %>%
+    mutate(
+      model = map2(train, formula, est_model),
+      model0 = map2(model, train, ~update(.x, . ~ 1, data=.y)), # constant only model for pseudo.r2 calc
+      preds = map2(model, test, predict, type="response"),
+      pseudo.r2 = map2_dbl(model, model0, ~1-logLik(.x)/logLik(.y)),
+      n=map_dbl(model, function(x) x$n),
+      #nrmse = map2_dbl(preds, map(test, resample_get, col_name="td.miles.Walk"), calc_nrmse),
+      rmse = map2_dbl(preds, map(test, resample_get, col_name="td.miles.Walk"), calc_rmse)
+      
+    ) %>%
+    dplyr::select(-c(test, train)) %>%
+    I() #name_list.cols()
+  
+wpmt_hdl$model %>% map(summary)
+```
+
+2. Model goodness-of-fit and Validation
+```{r}
+goodness <- wpmt_hdl %>%
+            dplyr::select(-c(model, preds))%>%
+            group_by(metro) %>%
+            summarize(rmse=mean(rmse),
+                      #nrmse=mean(nrmse),
+                      pseudo.r2=mean(pseudo.r2)) 
+goodness
+```
+
+3. sensitivity
+```{r, message=F}
+ out <- test_sensitivity(hh.df, x_col="AADVMT", model.df=wpmt_hdl, segment_col="metro")
+ out <- test_sensitivity(hh.df, x_col="VehPerDriver", model.df=wpmt_hdl, segment_col="metro")
+ out <- test_sensitivity(hh.df, x_col="D1D", model.df=wpmt_hdl, segment_col="metro")
+ out <- test_sensitivity(hh.df, x_col="LogIncome", model.df=wpmt_hdl, segment_col="metro")
+ out <- test_sensitivity(hh.df, x_col="Tranmilescap", model.df=wpmt_hdl, segment_col="metro", segment="metro")
+```
+
+
+
+###### Bike Miles Traveled Model (hurdle model)
+
+```{r, include=F}
+## truncate mm.df based on Bike PMT < 99 percentile
+bpmt_mm.df <- mm.df %>%
+  mutate(train = map(train, ~resample_filter(.x, td.miles.Bike < quantile(td.miles.Bike, .99, na.rm=T))),
+         test = map(test,   ~resample_filter(.x, td.miles.Bike < quantile(td.miles.Bike, .99, na.rm=T))))
+```
+
+```{r}
+int_round <- function(x) as.integer(round(x))
+
+plot_df <- bpmt_mm.df %>%
+  transmute(metro, 
+            dpmt=map(train, resample_get, col_name="td.miles.Bike"),
+            dpmt_int=map(dpmt, int_round),
+            pow_dpmt=map(dpmt, function(x) x^0.10)) %>% 
+  unnest()
+ggplot(plot_df, aes(x=pow_dpmt)) +  
+    geom_histogram(aes(y=(..count..)/sum(..count..))) + 
+    scale_y_continuous(labels=percent) + 
+    scale_x_log10() + 
+    labs(y="", x="DPMT (Bike)") +
+    facet_wrap("metro")
+```
+
+1. Estimated Parameters
+
+- counterintuitive coefficients AADVMT
+
+```{r}
+fmlas <- list(metro    =~pscl::hurdle(int_round(td.miles.Bike) ~ LIF_CYC+Age0to14+D3apo | 
+                                  log1p(VehPerDriver)+HHSIZE+WRKCOUNT+LIF_CYC+Age0to14+D3bpo4+
+                                  Fwylnmicap+Tranmilescap:D4c+Tranmilescap, 
+                          data=.),
+              non_metro=~pscl::hurdle(int_round(td.miles.Bike) ~  Age0to14+D3bpo4 | 
+                                  AADVMT+log1p(VehPerDriver)+LIF_CYC+Age0to14+LogIncome,
+                              data=., ))
+
+#inv_fun <- function(x, pow=0.10) x^(1/pow)
+#inv_fun <- function(x) exp(x)
+
+bpmt_hdl <- bpmt_mm.df %>%
+    add_formulas(fmlas) %>%
+    mutate(
+      model = map2(train, formula, est_model),
+      model0 = map2(model, train, ~update(.x, . ~ 1, data=.y)), # constant only model for pseudo.r2 calc
+      preds = map2(model, test, predict, type="response"),
+      pseudo.r2 = map2_dbl(model, model0, ~1-logLik(.x)/logLik(.y)),
+      #n=map_dbl(model, function(x) x$n),
+      #nrmse = map2_dbl(preds, map(test, resample_get, col_name="td.miles.Bike"), calc_nrmse),
+      rmse = map2_dbl(preds, map(test, resample_get, col_name="td.miles.Bike"), calc_rmse)
+      
+    ) %>%
+    dplyr::select(-c(test, train)) %>%
+    I() #name_list.cols()
+  
+bpmt_hdl$model %>% map(summary)
+```
+
+2. Model goodness-of-fit and Validation
+```{r}
+goodness <- bpmt_hdl %>%
+            dplyr::select(-c(model, preds))%>%
+            group_by(metro) %>%
+            summarize(rmse=mean(rmse),
+                      #nrmse=mean(nrmse),
+                      pseudo.r2=mean(pseudo.r2)) 
+goodness
+```
+
+3. sensitivity
+```{r, message=F}
+ out <- test_sensitivity(hh.df, x_col="AADVMT", model.df=bpmt_hdl, segment_col="metro")
+ out <- test_sensitivity(hh.df, x_col="VehPerDriver", model.df=bpmt_hdl, segment_col="metro")
+ #out <- test_sensitivity(hh.df, x_col="D1D", model.df=bpmt_hdl, segment_col="metro")
+ out <- test_sensitivity(hh.df, x_col="LogIncome", model.df=bpmt_hdl, segment_col="metro")
+ out <- test_sensitivity(hh.df, x_col="Tranmilescap", model.df=bpmt_hdl, segment_col="metro", segment="metro")
+```
+
+#### Trip Frequency-Length (TFL) Models
+An alternative model structure we propose is a combination of household level models of trip frequency and average trip length by mode (Figure 2). 
+
+```{r tfl-flowchart, echo=FALSE, fig.cap=fig$cap("tfl-flowchart", "Flow Chart of Trip Frequency-Length Model")}
+include_graphics("modechoice-flowchart3.png", dpi = NA)
+```
+
+##### Trip Frequency Models
+The trip frequency models of Transit, Bike, and Walk are hurdle models of dependent variable (\# Trips): $(\# Trips) = zinb(X\beta)$.  The hurdle models allows the "inflated" zeros in Transit, Bike, and Walk trip counts to be accounted. It differs from a hurdle model in that a hurdle model allows zeros to arise from both the zero inflation process and the count process, while a hurdle model only allows zeros to arise from the zero hurdle process but not the count process. Like other models, the trip frequency models are segmented by metro and non-metro areas.
+
+###### Transit Trip Frequency Model
+
+```{r}
+plot_df <- mm.df %>% 
+  transmute(metro, 
+            ttf=map(train, resample_get, col_name="ntrips.Transit")
+            ) %>% 
+  unnest()
+ggplot(plot_df, aes(x=ttf)) +  
+    geom_histogram(aes(y=(..count..)/sum(..count..))) + 
+    scale_y_continuous(labels=percent) + 
+    #scale_x_log10() + 
+    labs(y="", x="Transit trip frequency") +
+    facet_wrap("metro")
+```
+
+1. estimated Parameters
+
+```{r}
+
+fmlas <- list(metro    =~pscl::hurdle(ntrips.Transit ~ AADVMT+HHSIZE+LIF_CYC+
+                                  Age0to14+D1D+Tranmilescap+D4c | 
+                                  AADVMT+VehPerDriver+HHSIZE+WRKCOUNT+LIF_CYC+Age0to14+D1D+
+                                  Fwylnmicap+Tranmilescap:D4c,
+                             data=., na.action=na.omit),
+              non_metro=~pscl::hurdle(ntrips.Transit ~  log1p(AADVMT)+log1p(VehPerDriver)+HHSIZE+LIF_CYC+
+                                  Age0to14+LogIncome+D1D | 
+                                  log1p(AADVMT)+log1p(VehPerDriver)+WRKCOUNT+LIF_CYC+Age0to14+D1B+D3bmm4+
+                                  LogIncome,
+                              data=., na.action=na.omit))
+
+ttf_lm <- mm.df %>%
+    add_formulas(fmlas) %>%
+    mutate(
+      model = map2(train, formula, est_model),
+      preds = map2(model, test, predict, type="response"),
+      #summary = map(model, summary),
+      #model = map(model, strip_model),
+      pseudo.r2 = map_dbl(model, calc_pseudo.r2),
+      #pseudo.r2 = map_dbl(model, calc_pseudo.r2),
+      #pseudo.r2 = map_dbl(model, pspR2),
+      #r2 = map_dbl(map(model, summary), "r.squared"),
+      #nrmse = map2_dbl(preds, map(test, resample_get, col_name="ntrips.Transit"), calc_nrmse),
+      rmse = map2_dbl(preds, map(test, resample_get, col_name="ntrips.Transit"), calc_rmse)
+      
+      #rmse = map2_dbl(model, test, modelr::rmse)
+    ) %>%
+    dplyr::select(-c(test, train)) %>%
+    I() #name_list.cols()
+  
+ttf_lm$model %>% map(summary)
+  
+```
+
+2 validation 
+```{r}
+goodness <- ttf_lm %>%
+            dplyr::select(-c(model, preds))%>%
+            group_by(metro) %>%
+            summarize(rmse=mean(rmse),
+                      #nrmse=mean(nrmse),
+                      pseudo.r2=mean(pseudo.r2)) 
+goodness
+```
+
+3. sensitivity 
+```{r}
+out <- test_sensitivity(hh.df, x_col="AADVMT", model.df=ttf_lm, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="VehPerDriver", model.df=ttf_lm, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="LogIncome", model.df=ttf_lm, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="D1B", model.df=ttf_lm, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="D1D", model.df=ttf_lm, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="Tranmilescap", model.df=ttf_lm, segment_col="metro", segment="metro")
+```
+
+###### Walking Trip Frequency Model
+
+```{r}
+plot_df <- mm.df %>% 
+  transmute(metro, 
+            ttf=map(train, resample_get, col_name="ntrips.Walk")
+            ) %>% 
+  unnest()
+ggplot(plot_df, aes(x=ttf)) +  
+    geom_histogram(aes(y=(..count..)/sum(..count..))) + 
+    scale_y_continuous(labels=percent) + 
+    #scale_x_log10() + 
+    labs(y="", x="Walk trip frequency") +
+    facet_wrap("metro")
+```
+
+1. estimated Parameters
+
+```{r}
+
+fmlas <- list(metro    =~pscl::hurdle(ntrips.Walk ~ AADVMT + VehPerDriver+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM + D3bmm4 + D3bpo4 +
+                                  log1p(D5ar) + Fwylnmicap + Tranmilescap + LogIncome + D3apo + D4c | 
+                                  AADVMT + VehPerDriver+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM + D3bmm4 + D3bpo4 +
+                                  log1p(D5ar) + WRKCOUNT + Fwylnmicap + Tranmilescap + LogIncome + D3apo + D4c,
+                             data=., na.action=na.omit),
+              non_metro=~pscl::hurdle(ntrips.Walk ~  AADVMT + VehPerDriver+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM + D3bpo4 +
+                                  log1p(D5ar) + WRKCOUNT + LogIncome | 
+                                  AADVMT + VehPerDriver + HHSIZE + LIF_CYC + Age0to14 + D1D + D2A_EPHHM + D3bpo4 +
+                                  WRKCOUNT + LogIncome + D3apo,
+                              data=., na.action=na.omit))
+
+wlktf_lm <- mm.df %>%
+    add_formulas(fmlas) %>%
+    mutate(
+      model = map2(train, formula, est_model),
+      preds = map2(model, test, predict, type="response"),
+      #summary = map(model, summary),
+      #model = map(model, strip_model),
+      pseudo.r2 = map_dbl(model, calc_pseudo.r2),
+      #pseudo.r2 = map_dbl(model, calc_pseudo.r2),
+      #pseudo.r2 = map_dbl(model, pspR2),
+      #r2 = map_dbl(map(model, summary), "r.squared"),
+      #nrmse = map2_dbl(preds, map(test, resample_get, col_name="ntrips.Walk"), calc_nrmse),
+      rmse = map2_dbl(preds, map(test, resample_get, col_name="ntrips.Walk"), calc_rmse)
+      
+      #rmse = map2_dbl(model, test, modelr::rmse)
+    ) %>%
+    dplyr::select(-c(test, train)) %>%
+    I() #name_list.cols()
+  
+wlktf_lm$model %>% map(summary)
+  
+```
+
+2 validation 
+```{r}
+goodness <- wlktf_lm %>%
+            dplyr::select(-c(model, preds))%>%
+            group_by(metro) %>%
+            summarize(rmse=mean(rmse),
+                      #nrmse=mean(nrmse),
+                      pseudo.r2=mean(pseudo.r2)) 
+goodness
+```
+
+3. sensitivity 
+```{r}
+out <- test_sensitivity(hh.df, x_col="AADVMT", model.df=wlktf_lm, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="VehPerDriver", model.df=wlktf_lm, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="LogIncome", model.df=wlktf_lm, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="D1D", model.df=wlktf_lm, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="Tranmilescap", model.df=wlktf_lm, segment_col="metro", segment="metro")
+```
+
+###### Biking Trip Frequency Model
+
+```{r}
+plot_df <- mm.df %>% 
+  transmute(metro, 
+            ttf=map(train, resample_get, col_name="ntrips.Bike")
+            ) %>% 
+  unnest()
+ggplot(plot_df, aes(x=ttf)) +  
+    geom_histogram(aes(y=(..count..)/sum(..count..))) + 
+    scale_y_continuous(labels=percent) + 
+    #scale_x_log10() + 
+    labs(y="", x="Bike trip frequency") +
+    facet_wrap("metro")
+```
+
+1. estimated Parameters
+
+```{r}
+
+fmlas <- list(metro    =~pscl::hurdle(ntrips.Bike ~ AADVMT + Age0to14 + Age65Plus + D1C + D3bpo4 +
+                                  WRKCOUNT + LogIncome | 
+                                  log1p(AADVMT) + HHSIZE + LIF_CYC + Age0to14 + Age65Plus + D2A_EPHHM + D3bpo4 +
+                                  WRKCOUNT + Fwylnmicap + Tranmilescap + LogIncome,
+                             data=., na.action=na.omit),
+              non_metro=~pscl::hurdle(ntrips.Bike ~  AADVMT + VehPerDriver + HHSIZE + LIF_CYC + Age0to14 + Age65Plus + D1D + 
+                                  log1p(D5ar) + WRKCOUNT + LogIncome + D3apo |
+                                  AADVMT + VehPerDriver + LIF_CYC + Age0to14 + Age65Plus + D1A + D2A_EPHHM + 
+                                  log1p(D5ar) + WRKCOUNT + LogIncome + D3apo,
+                              data=., na.action=na.omit))
+
+bktf_lm <- mm.df %>%
+    add_formulas(fmlas) %>%
+    mutate(
+      model = map2(train, formula, est_model),
+      preds = map2(model, test, predict, type="response"),
+      #summary = map(model, summary),
+      #model = map(model, strip_model),
+      pseudo.r2 = map_dbl(model, calc_pseudo.r2),
+      #pseudo.r2 = map_dbl(model, calc_pseudo.r2),
+      #pseudo.r2 = map_dbl(model, pspR2),
+      #r2 = map_dbl(map(model, summary), "r.squared"),
+      
+      #nrmse = map2_dbl(preds, map(test, resample_get, col_name="ntrips.Bike"), calc_nrmse),
+      rmse = map2_dbl(preds, map(test, resample_get, col_name="ntrips.Bike"), calc_rmse)
+      
+      #rmse = map2_dbl(model, test, modelr::rmse)
+    ) %>%
+    dplyr::select(-c(test, train)) %>%
+    I() #name_list.cols()
+  
+bktf_lm$model %>% map(summary)
+  
+```
+
+2 validation 
+```{r}
+goodness <- bktf_lm %>%
+            dplyr::select(-c(model, preds))%>%
+            group_by(metro) %>%
+            summarize(rmse=mean(rmse),
+                      #nrmse=mean(nrmse),
+                      pseudo.r2=mean(pseudo.r2)) 
+goodness
+```
+
+3. sensitivity 
+```{r}
+out <- test_sensitivity(hh.df, x_col="AADVMT", model.df=bktf_lm, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="VehPerDriver", model.df=bktf_lm, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="LogIncome", model.df=bktf_lm, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="D1A", model.df=bktf_lm, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="D1C", model.df=bktf_lm, segment_col="metro")
+out <- test_sensitivity(hh.df, x_col="Tranmilescap", model.df=bktf_lm, segment_col="metro", segment="metro")
+```
+
+##### Average Trip Length Models
+The average trip length models are linear regression models with dependent variable (TRPMILES) power-transformed: $TRIPMILES^{0.10} = X\beta$. These models are similar in model structure to the non-zero DVMT model in GreenSTEP, but for average trip length for Transit, Bike and Walk trips.
+
+The TFL model option is simplified from the original Trip Frequency-Length-Mode (TFLM) Model, which models individual trips for each household in the sample. One of reason for this simplification was performance: even though it has advantages in that it allows trip information to be utilized in these models, for example, trip purpose and trip length, which are important factors in mode choice decision. In estimation of TFLM model with NHTS data, it needs to use the trip dataset, which has more than 1 million observations; while in simulation, it requires to create a dataset with one observation for every trip. Even though it can work, the requirement for memory and the penalty of speed are high. We eventually settle with the simplified TFL model that caputres the essential of travel demand for non-driving modes.
+
+###### Transit Trip Length Model
+
+```{r, include=F}
+## truncate mm.df based on AADVMT between (0, 99) percentile
+tatd_mm.df <- mm.df %>%
+  mutate(train = map(train, ~resample_filter(.x, atd.miles.Transit > 0 & atd.miles.Transit < quantile(atd.miles.Transit, .99, na.rm=T))),
+         test  = map(test,  ~resample_filter(.x, atd.miles.Transit > 0 & atd.miles.Transit < quantile(atd.miles.Transit, .99, na.rm=T))))
+```
+
+```{r}
+pow <- 0.24
+plot_df <- tatd_mm.df %>% 
+  transmute(metro, 
+            tatd=map(train, resample_get, col_name="atd.miles.Transit"),
+            tatd_int=map(tatd, ~as.integer(round(.x))),
+            pow_tadt=map(tatd, function(x) x^pow)) %>% 
+  unnest()
+ggplot(plot_df, aes(x=pow_tadt)) +  
+    geom_histogram(aes(y=(..count..)/sum(..count..))) + 
+    scale_y_continuous(labels=percent) + 
+    #scale_x_log10() + 
+    labs(y="", x="Transit average trip distance") +
+    facet_wrap("metro")
+```
+
+1. estimated Parameters
+
+```{r}
+
+fmlas <- list(metro    =~lm(I((td.miles.Transit)^0.24) ~ log1p(AADVMT) + log1p(VehPerDriver)+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM + D3bmm4 + D3bpo4 +
+                                  log1p(D5ar) + WRKCOUNT + Fwylnmicap + Tranmilescap + Tranmilescap:D4c + LogIncome + D3apo + D4c,
+                             data=., na.action=na.omit),
+              non_metro=~lm(I((td.miles.Transit)^0.24) ~  log1p(AADVMT) + log1p(VehPerDriver)+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM + 
+                                  log1p(D5ar) + WRKCOUNT + LogIncome + D3apo,
+                              data=., na.action=na.omit))
+
+inv_fun <- function(x, pow1=0.24) x^(1/pow1)  
+tatd_lm <- mm.df %>%
+    add_formulas(fmlas) %>%
+    mutate(
+      model = map2(train, formula, est_model),
+      preds = map2(model, test, predict, type="response"),
+      preds = map(preds, inv_fun),
+      #summary = map(model, summary),
+      #model = map(model, strip_model),
+      #pseudo.r2 = map_dbl(model, calc_pseudo.r2),
+      #pseudo.r2 = map_dbl(model, pspR2),
+      r2 = map_dbl(map(model, summary), "r.squared"),
+      #nrmse = map2_dbl(preds, map(test, resample_get, col_name="td.miles.Transit"), calc_nrmse),
+      rmse = map2_dbl(preds, map(test, resample_get, col_name="atd.miles.Transit"), calc_rmse)
+      #rmse = map2_dbl(model, test, modelr::rmse)
+    ) %>%
+    dplyr::select(-c(test, train)) %>%
+    I() #name_list.cols()
+  
+tatd_lm$model %>% map(summary)
+  
+```
+
+2. validation 
+```{r}
+goodness <- tatd_lm %>%
+            dplyr::select(-c(model, preds))%>%
+            group_by(metro) %>%
+            summarize(rmse=mean(rmse),
+                      #nrmse=mean(nrmse),
+                      r2=mean(r2)) 
+goodness
+```
+
+3. sensitivity 
+```{r}
+out <- test_sensitivity(hh.df, x_col="AADVMT", model.df=tatd_lm, segment_col="metro", inv_fun=inv_fun)
+out <- test_sensitivity(hh.df, x_col="VehPerDriver", model.df=tatd_lm, segment_col="metro", inv_fun=inv_fun)
+out <- test_sensitivity(hh.df, x_col="LogIncome", model.df=tatd_lm, segment_col="metro", inv_fun=inv_fun)
+out <- test_sensitivity(hh.df, x_col="D1D", model.df=tatd_lm, segment_col="metro", inv_fun=inv_fun)
+out <- test_sensitivity(hh.df, x_col="Tranmilescap", model.df=tatd_lm, segment_col="metro", segment="metro", inv_fun=inv_fun)
+```
+
+
+###### Walking Trip Length Model
+
+```{r, include=F}
+## truncate mm.df based on AADVMT between (0, 99) percentile
+watd_mm.df <- mm.df %>%
+  mutate(train = map(train, ~resample_filter(.x, atd.miles.Walk > 0 & atd.miles.Walk < quantile(atd.miles.Walk, .99, na.rm=T))),
+         test  = map(test,  ~resample_filter(.x, atd.miles.Walk > 0 & atd.miles.Walk < quantile(atd.miles.Walk, .99, na.rm=T))))
+```
+
+```{r}
+plot_df <- watd_mm.df %>% 
+  transmute(metro, 
+            watd=map(train, resample_get, col_name="atd.miles.Walk"),
+            watd_int=map(watd, ~as.integer(round(.x))),
+            pow_wadt=map(watd, function(x) x^0.10)) %>% 
+  unnest()
+ggplot(plot_df, aes(x=pow_wadt)) +  
+    geom_histogram(aes(y=(..count..)/sum(..count..))) + 
+    scale_y_continuous(labels=percent) + 
+    #scale_x_log10() + 
+    labs(y="", x="Walk average trip distance") +
+    facet_wrap("metro")
+```
+
+1. estimated Parameters
+
+```{r}
+fmlas <- list(metro    =~lm(I((td.miles.Walk)^0.10) ~ AADVMT + VehPerDriver+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM + D3bmm4 + D3bpo4 +
+                                  log1p(D5ar) + WRKCOUNT + Fwylnmicap + Tranmilescap + LogIncome + D3apo + D4c,
+                             data=., na.action=na.omit),
+              non_metro=~lm(I((td.miles.Walk)^0.10) ~  AADVMT + VehPerDriver+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM  +
+                                  WRKCOUNT + LogIncome + D3apo,
+                              data=., na.action=na.omit))
+inv_fun <- function(x, pow=0.10) x^(1/pow)  
+watd_lm <- mm.df %>%
+    add_formulas(fmlas) %>%
+    mutate(
+      model = map2(train, formula, est_model),
+      preds = map2(model, test, predict, type="response"),
+      preds = map(preds, inv_fun),
+      #summary = map(model, summary),
+      #model = map(model, strip_model),
+      #pseudo.r2 = map_dbl(model, calc_pseudo.r2),
+      #pseudo.r2 = map_dbl(model, pspR2),
+      r2 = map_dbl(map(model, summary), "r.squared"),
+      #nrmse = map2_dbl(preds, map(test, resample_get, col_name="td.miles.Walk"), calc_nrmse),
+      rmse = map2_dbl(preds, map(test, resample_get, col_name="atd.miles.Walk"), calc_rmse)
+      
+      #rmse = map2_dbl(model, test, modelr::rmse)
+    ) %>%
+    dplyr::select(-c(test, train)) %>%
+    I() #name_list.cols()
+  
+  watd_lm$model %>% map(summary)
+  
+```
+
+2 validation 
+```{r}
+goodness <- watd_lm %>%
+            dplyr::select(-c(model, preds))%>%
+            group_by(metro) %>%
+            summarize(rmse=mean(rmse),
+                      #nrmse=mean(nrmse),
+                      r2=mean(r2)) 
+goodness
+```
+
+3. sensitivity 
+```{r}
+out <- test_sensitivity(hh.df, x_col="VehPerDriver", model.df=watd_lm, segment_col="metro", inv_fun=inv_fun)
+out <- test_sensitivity(hh.df, x_col="LogIncome", model.df=watd_lm, segment_col="metro", inv_fun=inv_fun)
+out <- test_sensitivity(hh.df, x_col="D1D", model.df=watd_lm, segment_col="metro", inv_fun=inv_fun)
+out <- test_sensitivity(hh.df, x_col="Tranmilescap", model.df=watd_lm, segment_col="metro", segment="metro", inv_fun=inv_fun)
+```
+
+
+###### Biking Trip Length Model
+
+```{r, include=F}
+## truncate mm.df based on AADVMT between (0, 99) percentile
+batd_mm.df <- mm.df %>%
+  mutate(train = map(train, ~resample_filter(.x, atd.miles.Bike > 0 & atd.miles.Bike < quantile(atd.miles.Bike, .99, na.rm=T))),
+         test  = map(test,  ~resample_filter(.x, atd.miles.Bike > 0 & atd.miles.Bike < quantile(atd.miles.Bike, .99, na.rm=T))))
+```
+
+```{r}
+plot_df <- batd_mm.df %>% 
+  transmute(metro, 
+            batd=map(train, resample_get, col_name="atd.miles.Bike"),
+            batd_int=map(batd, ~as.integer(round(.x))),
+            pow_badt=map(batd, function(x) x^0.10)) %>% 
+  unnest()
+ggplot(plot_df, aes(x=batd)) +  
+    geom_histogram(aes(y=(..count..)/sum(..count..))) + 
+    scale_y_continuous(labels=percent) + 
+    #scale_x_log10() + 
+    labs(y="", x="Bike average trip distance") +
+    facet_wrap("metro")
+```
+
+1. estimated Parameters
+
+```{r}
+# LIF_CYC+Age0to14+D3apo | 
+#                                   log1p(VehPerDriver)+HHSIZE+WRKCOUNT+LIF_CYC+Age0to14+D3bpo4+
+#                                   Fwylnmicap+Tranmilescap:D4c+Tranmilescap
+# 
+# AADVMT + VehPerDriver+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM + D3bmm4 + D3bpo4 +
+#                                   log1p(D5ar) + WRKCOUNT + Fwylnmicap + Tranmilescap + LogIncome + D3apo + D4c
+
+fmlas <- list(metro    =~lm(I((td.miles.Bike)^0.10) ~ log1p(AADVMT) + LIF_CYC+Age0to14+UZAEMPDEN+D2A_EPHHM + D3bpo4 +
+                                  WRKCOUNT + Fwylnmicap + Tranmilescap + LogIncome,
+                             data=., na.action=na.omit),
+              non_metro=~lm(I((td.miles.Bike)^0.10) ~  AADVMT + VehPerDriver+HHSIZE+LIF_CYC+Age0to14+D1D+
+                                  WRKCOUNT + LogIncome + D3apo,
+                              data=., na.action=na.omit))
+inv_fun <- function(x, pow=0.10) x^(1/pow)  
+batd_lm <- mm.df %>%
+    add_formulas(fmlas) %>%
+    mutate(
+      model = map2(train, formula, est_model),
+      preds = map2(model, test, predict, type="response"),
+      preds = map(preds, inv_fun),
+      #summary = map(model, summary),
+      #model = map(model, strip_model),
+      #pseudo.r2 = map_dbl(model, calc_pseudo.r2),
+      #pseudo.r2 = map_dbl(model, pspR2),
+      r2 = map_dbl(map(model, summary), "r.squared"),
+      #nrmse = map2_dbl(preds, map(test, resample_get, col_name="td.miles.Bike"), calc_nrmse),
+      rmse = map2_dbl(preds, map(test, resample_get, col_name="atd.miles.Bike"), calc_rmse)
+      
+      #rmse = map2_dbl(model, test, modelr::rmse)
+    ) %>%
+    dplyr::select(-c(test, train)) %>%
+    I() #name_list.cols()
+  
+  batd_lm$model %>% map(summary)
+  
+```
+
+2 validation 
+```{r}
+goodness <- batd_lm %>%
+            dplyr::select(-c(model, preds))%>%
+            group_by(metro) %>%
+            summarize(rmse=mean(rmse),
+                      #nrmse=mean(nrmse),
+                      r2=mean(r2)) 
+goodness
+```
+
+3. sensitivity 
+```{r, message=F}
+out <- test_sensitivity(hh.df, x_col="AADVMT", model.df=batd_lm, segment_col="metro", inv_fun=inv_fun)
+out <- test_sensitivity(hh.df, x_col="LogIncome", model.df=batd_lm, segment_col="metro", inv_fun=inv_fun)
+out <- test_sensitivity(hh.df, x_col="D1D", model.df=batd_lm, segment_col="metro", inv_fun=inv_fun)
+out <- test_sensitivity(hh.df, x_col="UZAEMPDEN", model.df=batd_lm, segment_col="metro", inv_fun=inv_fun)
+out <- test_sensitivity(hh.df, x_col="Tranmilescap", model.df=batd_lm, segment_col="metro", segment="metro", inv_fun=inv_fun)
+```
+### Considered Model Structures
+
+#### Person Miles Traveled by Mode (PMT) Model
+
+The PMT model is made up two sequential models: a total person miles traveled (PMT) and a mode allocation model(Figure 1).  
+
+![Figure 1. Flow Chart of Person Miles Traveled by Mode (PMT) Model](modechoice-flowchart1.jpg)
+
+The total person miles traveled is a household level model of total person miles traveled by all household members. It is a linear regression model with pmt (log transformed) as the dependent variable:$\ln(pmt) = X\beta$
+
+```{r, include=FALSE}
+#td.m1 <- lm(log(td.miles) ~ LogIncome + HHSIZE + HHVEHCNT + DrvAgePop + Age65Plus + HTPPOPDN + D1A + D1C, data=hh.df)
+#stargazer(td.m1, type="html")
+
+# library(MASS)
+# td.m20 <- lm(log(td.miles) ~ LogIncome + HHSIZE + HHVEHCNT + DrvAgePop + Age65Plus + HTPPOPDN + COUNTHU10 + TOTPOP10 + HH + WORKERS + R_LOWWAGEW + R_MEDWAGEW + R_HIWAGEWK + R_PCTLOWWA + EMPTOT + E5_RET10 + E5_OFF10 + E5_IND10 + E5_SVC10 + E5_ENT10 + AC_TOT + AC_WATER + AC_LAND + AC_UNPR + D1A + D1B + D1C + D1C5_Ret10 + D1C5_Off10 + D1C5_Ind10 + D1C5_Svc10 + D1C5_Ent10 + D1D + D2A_JPHH + D2B_E5MIX + D2B_E5MIXA + D2A_EPHHM + D2C_TRPMX1 + D2C_TRPMX2 + D2C_TRIPEQ + D2R_JOBPOP + D2R_WRKEMP + D2A_WRKEMP + D2C_WREMIX + D3a + D3aao + D3amm + D3apo + D3b + D3bao + D3bmm3 + D3bmm4 + D3bpo3 + D3bpo4 + D4b025 + D4b050 + D5ar + D5ae + D5be_Flag + D5cr + D5cri + D5cei, data=hh.df)
+# step20 <- stepAIC(td.m20, direction="both")
+# step20$anova
+# detach('package:MASS', unload=T)
+
+#pmt.plm <- lm( (td.miles)^0.18 ~ LogIncome + HHSIZE + HHVEHCNT + DrvAgePop + Age65Plus + 
+    # HTPPOPDN + R_LOWWAGEW + R_MEDWAGEW + R_PCTLOWWA + 
+    # D1A + D1D + D1C5_Ind10 + 
+    # D2C_TRPMX2 + D2C_TRIPEQ + D2R_JOBPOP + D2R_WRKEMP +
+    # D2C_WREMIX + D3a + D3aao + D3amm + D3b + D3bmm4 + 
+    # D3bpo3 + D3bpo4 + D4b050 + D5ar + D5ae + D5be_Flag + D5cr + 
+    # D5cri, data=hh.df[-131561, ])
+
+#pmt.plm <- lm((td.miles)^0.18 ~ LogIncome + HHSIZE + VehPerDrvAgePop + Age65Plus + Age0to14 + LIF_CYC
+#              + TOTPOP10_1 + EMPTOT_2 + E5_RET10 + E5_SVC10 + D1D
+#              + D2A_JPHH + D3amm + D3apo + D4a + D4c + D4d, data=hh.df)
+
+# td.m2 <- lm(lntd.milescap ~ LogIncome + HHSIZE + HHVEHCNT + DrvAgePop + Age65Plus + HTPPOPDN + COUNTHU10 + TOTPOP10 + HH + P_WRKAGE + AUTOOWN0 + PCT_AO0 + AUTOOWN1 + PCT_AO1 + AUTOOWN2P + PCT_AO2P + WORKERS + R_LOWWAGEW + R_MEDWAGEW + R_HIWAGEWK + R_PCTLOWWA + EMPTOT + E5_RET10 + E5_OFF10 + E5_IND10 + E5_SVC10 + E5_ENT10 + E8_RET10 + E8_OFF10 + E8_IND10 + E8_SVC10 + E8_ENT10 + E8_ED10 + E8_HLTH10 + AC_TOT + AC_WATER + AC_LAND + AC_UNPR + D1A + D1B + D1C + D1C5_Ret10 + D1C5_Off10 + D1C5_Ind10 + D1C5_Svc10 + D1C5_Ent10 + D1C8_Ret10 + D1C8_Off10 + D1C8_Ed10 + D1C8_Hlth1 + D2A_JPHH + D2B_E5MIX + D2B_E5MIXA + D2B_E8MIX + D2B_E8MIXA + D2A_EPHHM + D2C_TRPMX1 + D2C_TRPMX2 + D2C_TRIPEQ + D2R_JOBPOP + D2R_WRKEMP + D2A_WRKEMP + D2C_WREMIX + D3a + D3aao + D3amm + D3apo + D3b + D3bao + D3bmm3 + D3bmm4 + D3bpo3 + D3bpo4 + D4a + D4b025 + D4b050 + D4c + D4d + D5ar + D5ae + D5br + D5cr + D5cri + D5dr + D5dri + D5de + D5dei, data=hh.df)
+# 
+# step2 <- stepAIC(td.m2, direction="forward")
+# step2$anova
+#stargazer(td.m2, type="html")
+```
+
+The model can be segmented by life stage of a household (e.g. single, young couple, full nesters, empty nesters) and place types, etc for better model fit and predicting power.
+
+The mode allocation model captures the percentage of PMT by modes for households and allocates total PMT to each mode in prediction.  In estimation, we first choose a base mode, compute the ratio of PMT percentage for all other modes relative to that for the base mode, and then use log of the ratio (i.e., log-odds ratio) as the dependent variable of the mode allocation model. We will estimate $n - 1$ models if there are $n$ modes in total. In prediction, we first predict the log-odds ratios from each of the $n-1$ models, exponentiate the predicted log-odds ratios to get odds ratios, and apply the additional condition that the odds for all modes sum up to 1 to get the predicted PMT percentage for each mode. The model structure is consistent with a multinomial logit model that is commonly used in mode choice modeling.
+
+$\ln(\frac{P_{Transit}}{P_{Auto}}) = X\beta$, and $\ln(\frac{P_{Bike/Walk}}{P_{Auto}}) = X\beta$.
+
+```{r chunk28, eval=FALSE, include=FALSE, warning=FALSE}
+#hh.df_metro %<>% mutate(AADVMT=BESTMILE/365, lnBESTMILE=log1p(BESTMILE))
+
+phist.or.transit <- histogram.pct(hh.df_metro$or.Transit_Auto, x.lab="Transit vs Auto odds ratio")
+phist.lor.transit <- histogram.pct(log(hh.df_metro$or.Transit_Auto), x.lab="Transit vs Auto log odds ratio")
+phist.or.bike <- histogram.pct(hh.df_metro$or.Bike_Auto, x.lab="Bike vs Auto odds ratio")
+phist.lor.bike <- histogram.pct(log(hh.df_metro$or.Bike_Auto), x.lab="Bike vs Auto log odds ratio")
+phist.or.walk <- histogram.pct(hh.df_metro$or.Walk_Auto, x.lab="Walk vs Auto odds ratio")
+phist.lor.walk <- histogram.pct(log(hh.df_metro$or.Walk_Auto), x.lab="Walk vs Auto log odds ratio")
+
+grid.arrange(phist.or.transit, phist.lor.transit, 
+             phist.or.bike, phist.lor.bike, 
+             phist.or.walk, phist.lor.walk, ncol=2)
+```
+
+
+```{r, include=FALSE, eval=FALSE, results='asis'}
+#stargazer(lor.transit, lor.bike, lor.walk, no.space=TRUE, 
+#          column.labels=c("transit", "bike", "walk"), model.numbers=F, type="html", title="Log-odd-ratio Model")
+
+#lor.transit <- lm(log1p(odds.ratio) ~ LogIncome + HHSIZE + HHVEHCNT + DrvAgePop + Age65Plus + HTPPOPDN + D1A + D1C, data=hht.transit)
+#lor.transit <- lm(log1p(odds.ratio) ~ LogIncome + HHSIZE + VehPerDrvAgePop + Age65Plus + Age0to14 + LIF_CYC
+#              + TOTPOP10_1 + EMPTOT_2 + E5_RET10 + E5_SVC10 + D1D
+#              + D2A_JPHH + D3amm + D3apo + D4a + D4c + D4d, data=hht.transit)
+
+#stargazer(lor.transit, no.space=TRUE, type="html")
+```
+
+```{r, include=FALSE, eval=FALSE, results='asis'}
+#lor.bike <- lm(log1p(odds.ratio) ~ LogIncome + HHSIZE + VehPerDrvAgePop + Age65Plus + Age0to14 + LIF_CYC
+#              + TOTPOP10_1 + EMPTOT_2 + E5_RET10 + E5_SVC10 + D1D
+#              + D2A_JPHH + D3amm + D3apo + D4a + D4c + D4d, data=hht.bike)
+#stargazer(lor.bike, no.space=TRUE, type="html")
+```
+
+```{r, include=FALSE, eval=FALSE, results='asis'}
+#lor.walk <- lm(log1p(odds.ratio) ~ LogIncome + HHSIZE + VehPerDrvAgePop + Age65Plus + Age0to14 + LIF_CYC
+#             + TOTPOP10_1 + EMPTOT_2 + E5_RET10 + E5_SVC10 + D1D
+#              + D2A_JPHH + D3amm + D3apo + D4a + D4c + D4d, data=hht.walk)
+#stargazer(lor.walk, no.space=TRUE, type="html")
+```
+
+The advantage of the PMT model is that the model structure is similar to the existing household travel model in GreenSTEP, and consistent with mode choice models in travel demand modeling. The disadvantages includes: 
+
+1. PMT is modeled at an aggregated household level and some of the traveler/trip information that are useful for mode choice modeling is lost. For example, a household will likely have different probability of choosing walking for 2 trips of half mile each than for 1 trip of 1 mile. 
+2. The NHTS data is dominated by driving when mode shares are measured  by distance. The small share of transit and bike/walk mode may bring large variance of the odds ratio variable. 
+3. Finally, special handling is required when any of the shares are 0 among the modes being modeled (Auto, Transit, Bike/Walk), which is relatively common for daily travel.
+
+After reporting to the TAC in October 2016, we converged to suspend the work on PMT models and focus on TFL models (below).
+
+<!--
+https://www.researchgate.net/post/Are_there_generalizations_of_zero-inflated_negative_binomial_and_hurdle_modeling_that_address_continuous_ie_non-count_variables
+
+## Two-part model: 
+  * binomial + log-normal
+  * logit/probit + normal (with inverse hyperbolic sine transformations)
+    http://worthwhile.typepad.com/worthwhile_canadian_initi/2011/07/a-rant-on-inverse-hyperbolic-sine-transformations.html
+## One-part model: 
+  * Lognormal Hurdle model (Cragg, 1972; see also Wooldridge 2010 page 694 and Burke, 2009 at http://www.stata-journal.com/article.html?article=st0179)
+    From http://www.econometricsbysimulation.com/2012/06/craggs-double-hurdle-model-used-to.html
+    "This model is distinctly different than say a truncated normal regression because the truncated normal regression assumes linearity in y variable and only allows for the y variable to be kept above zero becuase the data is truncated.  Ie. people cannot sell negative quantities of produce (buy) in the data set.
+
+     "What instead we want to think about is that both decisions are independent (conditional on observables) and unique decisions. This might seem unreasonable at first.  However, in general if you are a grower you are probably going to decide to sell on the market ex ante to how much to sell.  That is, if you plant only cabbage then you probably are not going to settle for eating cabbage no matter how your crop turns out. "
+
+  * ZINB (ZIP)
+  http://www.ats.ucla.edu/stat/stata/dae/zinb.htm
+  "zero inflated models with distribution as continous.Many literature had used this with continous distribution to be gamma." (@Guddattu researchgate)
+  
+  * TOBIT
+    "The Tobit model uses the same explanatory variables for both the magnitude and the departure from zero." (Howard, Researchgate)
+    "whether the zeros are real or not. If not, then a censored GLM is what you want. If so, then a zero-inflated model is required. " (@Smithson researchgate)
+    
+  * Hurdle vs ZINB (http://stats.stackexchange.com/questions/81457/what-is-the-difference-between-zero-inflated-and-hurdle-distributions-models)
+  https://cran.r-project.org/web/packages/pscl/vignettes/countreg.pdf
+  
+  In simple terms: both zero-inflated and hurdle models are described in two parts.
+
+  The first is the on-off part, which is a binary process. The system is "off" with probability ππ and "on" with probability 1−π1−π. (Here, ππ is known as the inflation probability.) When the system is "off," only zero counts are possible. This part is the same for zero-inflated and hurdle models.
+
+  The second part is the counting part, which occurs when the system is "on." This is where zero-inflated and hurdle models differ. In zero-inflated models, counts can still be zero. In hurdle models they must be nonzero. For this part, zero-inflated models use a "usual" discrete probability distribution while hurdle models use a zero-truncated discrete probability distribution function.
+
+  Example of a hurdle model: An automobile manufacturer wants to compare two quality control programs for its automobiles. It will compare them on the basis of the number of warranty claims filed. For each program, a set of randomly selected customers are followed for 1 year and the number of warranty claims they file is counted. The inflation probabilities for each of the two programs are then compared. The “off” state is “filed zero claims” while the “on” state is “filed at least one claim.”
+
+  Example of a zero-inflated model: In the same study above, the researchers find out that some repairs on the automobiles were fixed without the filing of a warranty claim. In this way, the zeroes are a mixture of the absence of quality control problems as well as the presence of quality control problems that involved no warranty claims. The “off” state means “filed zero claims” while the “on” state means “filed at least one claim OR had repairs fixed without filing a claim.”
+
+  See here for a study in which both types of models were applied to the same data set. 
+    
+-->
+
+## Next step
+
+1. ~~Re-retrieve residential location for 2009 NHTS with 2010 census block geography;~~
+2. ~~Finalize model specification for each model structure, incorporating SLD variables and place type information~~;
+3. ~~Performance testing of model structure/specification~~;
+4. ~~Explore potential simplified mode choice model if necessary?;~~ (not using mode choice models)
+5. ~~(Task 3) Implement selected model structure/specification as a package for the unified RSPM framework;~~
+6. Explore alternatives for reasonable price elasticities.
+
+## Other considerations
+Statistical significance, theoretical foundation, and predicting power: because of the large sample size (n>15,000) of 2009 NHTS, it is easy to get a large number of significant coefficients, but they do not necessarily make for a good predictive model. On the other hand, models solely focusing on predictive power (for example, those based on machine learning algorithms) may lack of theoretical basis thus may break down when predict outcomes for conditions far from the base year range. One thing that is particularly hard to do for predictive model is for them to capture behavior that has not been observed in data, for example, potential non-linearity of price elasticities when price rise.
+
+## References
+1. Circella, Giovanni, Susan Handy, and Marlon G. Boarnet, 2014. Impacts of Gas Price on Passenger Vehicle Use and Greenhouse Gas Emissions, California Air Resources Board, Technical Background Document.
+
+2. Dong, Jing, Diane Davidson, Frank Southworth and Tim Reuscher, 2012. Analysis of Automobile Travel Demand Elasticities With Respect To Travel Cost, Federal Highway Administration
+
+2. Graham, D.J., Glaister, S., 2002. The Demand for Automobile Fuel: A Survey of Elasticities. Journal of Transport Economics and Policy (JTEP) 36, 1–25.
+
+3. Gregor, Brian, Modeling the Effects of Vehicle Travel Costs on Household Vehicle Travel. GreenSTEP Technical Document.
+
+4. Ramsey, Kevin and Alexander Bell, 2014. Smart Location Database Version 2.0 User Guide. U.S. EPA. URL: https://www.epa.gov/smartgrowth/smart-location-mapping#SLD, accessed on 03/01/2015.
+
+5. U.S. Department of Transportation, Federal Highway Administration, 2009 National Household Travel Survey. URL: http://nhts.ornl.gov, accessed on 02/09/2016.
+
+```{r show-sessionInfo, echo=T}
+sessionInfo()
+```
