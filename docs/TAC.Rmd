@@ -1,0 +1,295 @@
+---
+title: "SPR 788 Incorporate Travel Mode Choices in the Regional Strategic Planning Model (RSPM) Tool"
+subtitle: "March 2017 TAC Meeting"
+author: "Liming Wang"
+date: "3/22/2017"
+output:
+  xaringan::moon_reader:
+    seal: yes
+    nature:
+      highlightStyle: github
+
+---
+
+<style>
+  @page {
+    size: 1210px 681px;
+    margin: 0;
+  }
+  
+  @media print {
+    .remark-slide-scaler {
+      width: 100% !important;
+      height: 100% !important;
+      transform: scale(1) !important;
+      top: 0 !important;
+      left: 0 !important;
+    }
+  }
+</style>
+
+```{r setup, include=F}
+if (!require("pacman")) {install.packages("pacman"); library(pacman)}
+pacman::p_load(dplyr, ggplot2, knitr, tidyr, readxl, stringr, readr, scales, pander)
+
+knitr::opts_knit$set(root.dir = "../")
+knitr::opts_chunk$set(message=FALSE, warning=F, echo=F)
+options(width = 2000)
+panderOptions('round', 2)
+panderOptions('keep.trailing.zeros', TRUE)
+```
+
+```{r functions, include=FALSE}
+# A function for captioning and referencing images
+fig <- local({
+    i <- 0
+    ref <- list()
+    list(
+        cap=function(refName, text) {
+            i <<- i + 1
+            ref[[refName]] <<- i
+            paste("Figure ", i, ": ", text, sep="")
+        },
+        ref=function(refName) {
+            ref[[refName]]
+        })
+})
+```
+
+# Outline
+
+- NHTS Annual VMT validation vs HPMS
+- Updates on Task 2 Model Design and Estimation
+- Updates on Task 3 Model Implementation and Task 4 Application Testing
+
+```{r source, include=F, cache=T}
+source('code/functions.R')
+source('code/load_data.R')
+
+hh.df_file <- "output/intermediate/hh_df.rda"
+hh.df <- load_or_source(hh.df_file, "hh.df")
+
+# Souce:  https://www.fhwa.dot.gov/policyinformation/statistics/2010/hm71.cfm 
+HPMS.VMT <- read_excel("data/Highway Statistics VMT.xlsx")
+HPMS.VMT <- HPMS.VMT %>%
+        mutate(UrbanizedArea=str_replace_all(UrbanizedArea, "--", "-"),
+               UZA=paste(UrbanizedArea, State, sep=","),
+               TotAVMT=TotDVMT*1000*365,
+               UZA=recode(UZA, 
+                          "Allentown-Bethlehem, PA"="Allentown-Bethlehem, PA-NJ",
+                          "Boston, MA"="Boston, MA-NH-RI",
+                          "Bridgeport-Stamford, CT"="Bridgeport-Stamford, CT-NY",
+                          "Charlotte, NC"="Charlotte, NC-SC",
+                          "Chicago, IL"="Chicago, IL-IN",
+                          "Cincinnati, OH"="Cincinnati, OH-KY-IN",
+                          "El Paso, TX"="El Paso, TX-NM",
+                          "Kansas City, MO"="Kansas City, MO-KS",
+                          "Louisville, KY"="Louisville, KY-IN", 
+                          "Memphis, TN"="Memphis, TN-MS-AR",
+                          "New York-Newark, NY"="New York-Newark, NY-NJ-CT",
+                          "Omaha, NE"="Omaha, NE-IA",
+                          "Pensacola, FL"="Pensacola, FL-AL", 
+                          "Philadelphia, PA"="Philadelphia, PA-NJ-DE-MD",
+                          "Portland, OR"="Portland, OR-WA",
+                          "Providence, RI"="Providence, RI-MA",
+                          "Spokane, WA"="Spokane, WA-ID",
+                          "Springfield, MA"="Springfield, MA-CT",
+                          "St. Louis, MO"="St. Louis, MO-IL",
+                          "Toledo, OH"="Toledo, OH-MI", 
+                          "Washington, DC"="Washington, DC-VA-MD", 
+                          "Worcester, MA"="Worcester, MA-CT")) %>%
+        dplyr::select(UZA, TotAVMT) %>%
+        arrange(UZA)
+
+UA <- read_csv("data/Census/ua_list_ua.csv")
+UA <- UA %>% mutate(NAME2=str_replace_all(NAME, "--", "-"),
+                    NAME2 = recode(NAME2,
+                                       "Aberdeen-Bel Air South-Bel Air North, MD"="Aberdeen-Havre de Grace-Bel Air, MD",
+                                       "Albany-Schenectady, NY" = "Albany, NY",
+                                       "Allentown, PA-NJ" = "Allentown-Bethlehem, PA-NJ",
+                                       "Augusta-Richmond County, GA--SC"  = "Augusta-Richmond County, GA-SC",
+                                       "Benton Harbor-St. Joseph-Fair Plain, MI" = "Benton Harbor-St. Joseph, MI", 
+                                       "Bonita Springs, FL" = "Bonita Springs-Naples, FL",
+                                       #"Brooksville, FL"
+                                       "Cumberland, MD-WV-PA" = "Cumberland, MD--WV",
+                                       #"Danville, IL", ##??
+                                       "Palm Coast-Daytona Beach-Port Orange, FL" = "Daytona Beach-Port Orange, FL",
+                                       "El Centro-Calexico, CA" = "El Centro, CA",
+                                       "Fayetteville-Springdale-Rogers, AR-MO" = "Fayetteville-Springdale, AR",
+                                       "Fort Walton Beach-Navarre-Wright, FL" = "Fort Walton Beach, FL",
+                                       "Gulfport, MS" = "Gulfport-Biloxi, MS",
+                                       "Urban Honolulu, HI" = "Honolulu, HI",
+                                       "Indio-Cathedral City, CA" = "Indio-Cathedral City-Palm Springs, CA",
+                                       "Kennewick-Pasco, WA" = "Kennewick-Richland, WA",
+                                       "Kenosha, WI-IL" = "Kenosha, WI",
+                                       "Las Vegas-Henderson, NV" = "Las Vegas, NV",
+                                       "Leesburg-Eustis-Tavares, FL" = "Leesburg-Eustis, FL",
+                                       "Los Angeles-Long Beach-Anaheim, CA" = "Los Angeles-Long Beach-Santa Ana, CA",
+                                       "Louisville/Jefferson County, KY-IN" = "Louisville, KY-IN",
+                                       "Minneapolis-St. Paul, MN-WI" = "Minneapolis-St. Paul, MN",
+                                       "Monessen-California, PA" = "Monessen, PA",
+                                       "Myrtle Beach-Socastee, SC-NC" = "Myrtle Beach, SC",
+                                       "North Port-Port Charlotte, FL" = "North Port-Punta Gorda, FL",
+                                       "Norwich-New London, CT-RI" = "Norwich-New London, CT",
+                                       "Poughkeepsie-Newburgh, NY-NJ" = "Poughkeepsie-Newburgh, NY",
+                                       "Raleigh-Durham, NC" = "Raleigh, NC",
+                                       "Reno, NV-CA" = "Reno, NV",
+                                       #"Sandusky, OH"
+                                       "Salt Lake City-West Valley City, UT" = "Salt Lake City, UT",
+                                       "Seaside-Monterey, CA" = "Seaside-Monterey-Marina, CA",
+                                       "South Lyon-Howell, MI" = "South Lyon-Howell-Brighton, MI",
+                                       "Spokane, WA" = "Spokane, WA-ID",
+                                       #"St. Charles, MD"
+                                       "Sebastian-Vero Beach South-Florida Ridge, FL" = "Vero Beach-Sebastian, FL",
+                                       "Victorville-Hesperia, CA" = "Victorville-Hesperia-Apple Valley, CA",
+                                       "Westminster-Eldersburg, MD" = "Westminster, MD"
+                        )
+  )
+
+```
+
+---
+
+# Annual VMT per capita
+
+- 2009 NHTS
+
+    Computed from the BESTMILE and HHSIZE variable in 2009 NHTS, weighted by household weights (WTHHFIN):
+    $AVMTcap_{uza} = \frac{\sum_{i \in uza}{BESTMILE_i * WTHHFIN_i}}{\sum_{i \in uza}{HHSIZE_i * WTHHFIN_i}}$
+
+```{r, include=F}
+AVMTcap.df <- hh.df %>%
+        dplyr::select(HOUSEID, BESTMILE, HHSIZE, UZA, WTHHFIN) %>%
+        group_by(UZA) %>%
+        summarise(AVMTcap=sum(BESTMILE * WTHHFIN, na.rm=T) / sum(HHSIZE * WTHHFIN, na.rm=T)) %>%
+        arrange(UZA)
+```
+
+- 2010 HPMS
+
+    Computed from total annual VMT divided by UZA population:
+    $AVMTcap_{uza} = \frac{TotDVMT_{uza} * 365 * 1000}{TotPop_{uza}}$
+
+```{r, include=F}
+HPMS.VMT <- HPMS.VMT %>% 
+  left_join(UA %>% select(NAME2, POP), by=c("UZA"="NAME2")) %>% 
+  mutate(AVMTcap=TotAVMT/POP)
+```
+
+---
+
+# Comparison (1)
+```{r, results="asis"}
+VMT_diff.df <- AVMTcap.df %>%
+        left_join(HPMS.VMT, by="UZA", suffix=c(".NHTS", ".HPMS")) %>%
+        filter(complete.cases(.)) %>%
+        mutate(`abs diff`=AVMTcap.NHTS - AVMTcap.HPMS,
+               `% diff`=`abs diff`/AVMTcap.HPMS*100
+               ) %>%
+        select(-TotAVMT, -POP) %>% 
+        arrange(desc(abs(`% diff`))) %>%
+        as.data.frame()
+knitr::kable(VMT_diff.df[1:10, ], "html", digits = 2)
+```
+
+---
+
+# Comparison (2)
+
+```{r}
+histogram.pct(VMT_diff.df$`abs diff`, x.lab="absolute different in annual VMT per capita")
+```
+
+---
+
+# Comparison (3)
+
+```{r}
+histogram.pct(VMT_diff.df$`% diff`, x.lab="% different in annual VMT per capita")
+```
+
+---
+
+# ORNL Documentation
+- 2009 NHTS technical document for BESTMILE estimate:
+    http://nhts.ornl.gov/2009/pub/DerivedAddedVariables2009.pdf (page 22-43)
+
+---
+
+# ORNL Comparison on Average Annual VMT (2001, 2009)
+```{r ornl_bestmile, echo=FALSE, fig.cap=fig$cap("ornl_bestmile", "ORNL BESTMILE Comparison")}
+include_graphics("ORNL-BESTMILE.png")
+```
+
+---
+
+# Task 2 Model Design and Estimation
+Models and Structure
+
+- GreenSTEP Daily VMT (DVMT) Models
+    1. binomial logit ZeroDVMT
+    2. power-transformed linear regression of DVMT (for DVMT > 0)
+- Annual Average Daily VMT (AADVMT) Model
+    - power-transformed linear regression of AADVMT (for all households)
+    - hurdle model of AADVMT
+- Trip-frequncy-length by (non-driving) modes models
+    1. hurdle model of trip Frequncies by modes (transit, walk, and bike)
+    2. power-transformed linear regression of average trip length
+- Daily person mile traveled (DPMT) by (non-driving) modes models
+    - hurdle models of DPMT by modes (transit, walk, and bike)
+
+---
+
+# Non-driving trip length (Transit)
+
+```{r}
+pow <- 0.24
+plot_df <- hh.df %>% 
+  filter(atd.miles.Transit>0) %>% 
+  transmute(metro, 
+            tatd=atd.miles.Transit,
+            tatd_int=as.integer(round(tatd)),
+            pow_tadt=tatd^0.24)
+ggplot(plot_df, aes(x=pow_tadt)) +
+    geom_histogram(aes(y=(..count..)/sum(..count..))) + 
+    scale_y_continuous(labels=percent) + 
+    #scale_x_log10() + 
+    labs(y="", x="Power-Transformed Transit average trip distance (>0)") +
+    facet_wrap("metro")
+```
+
+---
+
+# Non-driving trip length (Walk)
+```{r}
+plot_df <- hh.df %>% 
+  filter(atd.miles.Walk>0) %>% 
+  transmute(metro, 
+            tatd=atd.miles.Walk,
+            tatd_int=as.integer(round(tatd)),
+            pow_tadt=tatd^0.08)
+ggplot(plot_df, aes(x=pow_tadt)) +
+    geom_histogram(aes(y=(..count..)/sum(..count..))) + 
+    scale_y_continuous(labels=percent) + 
+    #scale_x_log10() + 
+    labs(y="", x="Power-Transformed Walk average trip distance (>0)") +
+    facet_wrap("metro")
+```
+
+---
+
+# Non-driving trip length (Bike)
+```{r}
+plot_df <- hh.df %>% 
+  filter(atd.miles.Bike>0) %>% 
+  transmute(metro, 
+            tatd=atd.miles.Bike,
+            tatd_int=as.integer(round(tatd)),
+            pow_tadt=tatd^0.25)
+ggplot(plot_df, aes(x=pow_tadt)) +
+    geom_histogram(aes(y=(..count..)/sum(..count..))) + 
+    scale_y_continuous(labels=percent) + 
+    #scale_x_log10() + 
+    labs(y="", x="Power-Transformed Bike average trip distance (>0)") +
+    facet_wrap("metro")
+```
