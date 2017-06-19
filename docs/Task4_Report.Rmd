@@ -1,0 +1,879 @@
+---
+title: "SPR 788 Task 4: Model Testing"
+author: "Liming Wang"
+date: "05/25/2017"
+output:
+  html_document:
+    toc: true
+    theme: cosmo
+    highlight: textmate
+    mathjax: null
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "../VETravelDemand")
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=F)
+options(scipen=100)
+options(digits=3)
+
+if (!require("pacman")) {install.packages("pacman"); library(pacman)}
+pacman::p_load(htmlTable, gridExtra, stringr, stargazer, bookdown)
+
+output_format <- knitr::opts_knit$get("rmarkdown.pandoc.to") #html/latex
+if(is.null(output_format)) output_format <- "text"
+```
+
+## Task Description
+
+> PSU researchers shall apply the newly incorporated mode shift module (in the updated RSPM tool) in the Corvallis Area Metropolitan Planning Organization (CAMPO) to assess how it can inform decision-making and to adjust the model as needed to provide accurate and helpful information.  ODOT staff will assist in assembling the necessary data for sensitivity test.  Initial testing will be documented by the PSU researchers.
+>
+> The phases of the testing task are:
+>
+> **Phase 1**: Test modules on their own using SLD/NHTS data used in estimation;  Test module sensitivity, vary SLD/NHTS inputs one at a time – elasticity response vs. Literature  VMT, PMT by mode, total and split by HH income, density, urban form groups
+> 
+> **Phase 2**: Test module in RVMPO RSPM (using a code wrapper and supplemental RVMPO block group place type inputs) comparing current vs. new outputs, VMT/Alt mode trips at MPO/district geographies (maps) and HH attributes (place types, income, …) – tests full model performance improvement over existing tool using built form variables
+> 
+> **Phase 3**: Test module in VisionEval  (written up to 1st call of this module) – tests to see if module will work in future VisionEval tool
+>
+
+```{r functions, include=FALSE}
+br <- ifelse(output_format=="html", "<br>", "\n")
+
+cut3 <- function(x, breaks, labels=NULL, 
+                 include.lowest = TRUE, right = FALSE,
+                 ordered_result = TRUE, ...) {
+  cut(x, breaks, labels = labels,
+      include.lowest = include.lowest, right = right, 
+      ordered_result = ordered_result, ...)
+}
+
+do_sensitivity <- function(df, segment_cols, x_col, y_col, model_df,
+                           update_func=NULL, filter_dots=NULL) {
+  sens_input <- df %>% 
+    group_by_(.dots=segment_cols) %>% 
+    nest()
+  
+  if(!is.null(filter_dots))
+    sens_input <- sens_input %>% 
+      filter_(.dots=filter_dots)
+  
+  sensvty_df <- ybar_by_dx(sens_input, x_col=x_col, model_df=model_df,
+                      y_col=y_col,
+                      x_args=seq(1.0, 1.5, by=0.1), x_func = `*`,
+                      segment_col=NULL,
+                      update_dependencies=FALSE,
+                      update_func=update_func,
+                      predict_type="response"
+                      #predict_type="class"
+  )
+
+  sensvty_df <- sensvty_df %>% 
+    mutate(x_label=(dx - 1)*100)
+  
+  xlab_text <- paste("% increase to ", x_col)
+  ylab_text <- paste("Average ", y_col)
+  
+  group_col <- setdiff(segment_cols, c("metro"))
+  
+  sensvty_plot <- ggplot(sensvty_df, aes_string(x="dx", y="y_bar", color=group_col, group=group_col)) + geom_line() +
+    xlab(xlab_text) + ylab(ylab_text)  +
+    scale_x_continuous(breaks=sensvty_df[["dx"]],
+                       labels=sensvty_df[["x_label"]]) + 
+    facet_wrap(~metro)
+  
+  sensvty_data <- sensvty_df %>%
+    mutate(by=group_col) %>% 
+    dplyr::rename_(.dots=setNames(group_col, "Category")) %>% 
+    dplyr::select(-y_hat, -y_med, -dx) %>% 
+    spread(x_label, y_bar) %>%
+    mutate_each(funs(. - `0`), `10`:`50`)  %>% 
+    rename(current=`0`,
+           `+10%`=`10`,
+           `+20%`=`20`,
+           `+30%`=`30`,
+           `+40%`=`40`,
+           `+50%`=`50`
+           ) %>% 
+    dplyr::rename_(.dots=setNames("current", y_col))
+  
+  list(plot=sensvty_plot, data=sensvty_data)
+}
+
+pp_sensitivity <- function(st_df, x_col="X", y_col="Y") {
+  group_labels <- st_df %>% 
+    group_by(by) %>% 
+    summarize(n=n()) %>% 
+    ungroup() %>% 
+    slice(match(unique(st_df$by), by))
+
+  htmlTable(
+    st_df %>% dplyr::select(-by),
+    rnames = FALSE,
+    align="llrrrrrrrr",
+    rgroup = paste(group_labels$by),
+    n.rgroup = group_labels$n,
+    cgroup = c("", paste("&Delta;", y_col, "wrt &Delta;", x_col)),
+    n.cgroup = c(4,5)
+  )
+}
+```
+
+## Phase I
+
+For Phase I of Task 4, elasticities of AADVMT and PMT with regard to density (D1B), household income, freeway supply (Freeway lane miles per caipta), transit supply (transit revenue miles per capita) are computed using the 2009 NHTS data. Except for a few unexpected couterintuitive direction of elasticities (bike PMT elasticities wrt D1B), the elasticities are inline with what has been documented in research literature: travel behavior responses to density change is small in magitude. Given the non-linear nature of the models, the elasticities vary by different segments - such as income group, development type, and current density level. Those segments are adopted from what [Brian Gregor used in his sensitivity testing for GreenSTEP](https://cities-lab.github.io/SPR788/GreenSTEP_Model_Doc-SensTestingDRAFT.pdf).
+
+### Annual Average Daily VMT (AADVMT)
+```{r}
+source("data-raw/AADVMTModel_df.R")
+
+hh_df <- hh_df %>% mutate(
+  overall="",
+  poppm=D1B * 640,
+  income=HHFAMINCVAL,
+  population_per_sqm=cut3(poppm, c(0, 1000, 5000, 10000, Inf), 
+                            label=c("<1k", "1k-5k", "5k-10k", ">10k")),
+  Income =cut3(income, c(0, 40000, 80000, Inf),
+              label=c("<$40k", "$40k-$80k", ">$80k"))) %>% 
+  filter(!is.na(Income))
+
+```
+
+#### Model Specification
+
+The specification for the AADVMT model has been documented in Task2. It is replicated here for quick reference.
+
+```{r, results="asis"}
+model_labels <- str_replace(AADVMT_lm$metro, "[_]", "")
+tight_stargazer(AADVMT_lm$model, column.labels = model_labels, 
+                model.numbers=T, type=output_format,
+                title="AADVMT model")
+```
+
+#### Population Density (D1B) Sensitivity 
+
+Both the table and figures below demonstrate small negative elasticities of AADVMT to local population density (D1B from Smart Location Database population density at block group level). Non-metropolitan areas have larger elasticities; higher density areas have larger elasticities, and TODs have larger elasticities.
+
+```{r, results="asis"}
+x_col <- "D1B"; y_col <- "AADVMT"
+sens_results <- list()
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=AADVMT_lm)
+}
+
+aadvmt_st_D1B <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(aadvmt_st_D1B, x_col=x_col, y_col=y_col)
+```
+
+```{r, echo=F}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+#### Household Income Sensitivity 
+
+As expected, household income has positive elasticities to AADVMT. The elasticities to income is most stable across segments.
+
+```{r, results="asis"}
+update_func <- . %>% mutate(LogIncome = log1p(income))
+x_col <- "income"; y_col <- "AADVMT"
+sens_results <- list()
+hh_df_incv <- hh_df %>% filter(!is.na(Income))
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df_incv, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=AADVMT_lm,
+                                             update_func=update_func)
+}
+
+aadvmt_st_income <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(aadvmt_st_income, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+#### Freeway Supply Sensitivity
+
+Also corraborating previous research and Brian's finding, the elasticities to freeway supply is positive but small, mostly because most places in the US already have good mobility by vehicle, additional freeways lead households to drive slightly more miles.
+
+```{r, results="asis"}
+x_col <- "FwyLaneMiPC"; y_col <- "AADVMT"
+sens_results <- list()
+hh_df_incv <- hh_df %>% filter(!is.na(Income))
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df_incv, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=AADVMT_lm,
+                                             filter_dots = "metro=='metro'")
+}
+
+aadvmt_st_FwyLaneMiPC <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(aadvmt_st_FwyLaneMiPC, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+#### Transit Supply Sensitivity
+
+As expected, transit supply (transit revenue miles per captia) has negative elasticities to AADVMT. The elasticities are inline with Brian's numbers. And elasticities are larger for dense areas and for TODs.
+
+```{r, results="asis"}
+x_col <- "TranRevMiPC"; y_col <- "AADVMT"
+sens_results <- list()
+hh_df_incv <- hh_df %>% filter(!is.na(Income))
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df_incv, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=AADVMT_lm,
+                                             filter_dots = "metro=='metro'")
+}
+
+aadvmt_st_TranRevMiPC <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(aadvmt_st_TranRevMiPC, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+### Bike PMT
+
+```{r}
+source("data-raw/BikePMTModel_df.R")
+
+hh_df <- hh_df %>% mutate(
+  overall="",
+  poppm=D1B * 640,
+  income=HHFAMINCVAL,
+  population_per_sqm=cut3(poppm, c(0, 1000, 5000, 10000, Inf), 
+                            label=c("<1k", "1k-5k", "5k-10k", ">10k")),
+  Income =cut3(income, c(0, 40000, 80000, Inf),
+              label=c("<$40k", "$40k-$80k", ">$80k"))) %>% 
+  filter(!is.na(Income))
+```
+
+#### Model specification
+
+The specification for the Bike PMT model has been documented in Task2. Here it is replicated for a quick reference.
+
+```{r}
+BikePMT_hdl <- name_list.cols(BikePMT_hdl, name_cols="metro")
+BikePMT_hdl$model %>% map(summary)
+```
+
+#### Population Density (D1B) Sensitivity 
+
+The elasticity estimates of bike person miles traveled per household with respect to population density (D1B) is negative due to the negative D1B coefficient in the model specification. Alternative model specifications have been tested with other density variables (D1C - job density, D1D - activity density) and interactions with D2 variables, the negative coefficient has been persistent. 
+
+The elasticities are the largest for the densest (>10,000 person/sq mile) non-metro areas, with density increases 50%, the bike PMT more than doubled for households living in these areas.
+
+```{r, results="asis"}
+x_col <- "D1B"; y_col <- "BikePMT"
+sens_results <- list()
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=BikePMT_hdl)
+}
+
+BikePMT_st_D1B <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(BikePMT_st_D1B, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+#### Household AADVMT Sensitivity 
+
+To capture the relationship between driving and usage of other modes, we include AADVMT in models of non-driving modes. Bike PMT consistenly has a negative elasticity to AADVMT with relatively little variations across segments. 
+
+```{r, results="asis"}
+x_col <- "AADVMT"; y_col <- "BikePMT"
+sens_results <- list()
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df_incv, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=BikePMT_hdl,
+                                             update_func=update_func)
+}
+
+BikePMT_st_income <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(BikePMT_st_income, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+#### Household Income Sensitivity 
+
+Bike PMT has a positive elasticity to household income. 
+
+```{r, results="asis"}
+update_func <- . %>% mutate(LogIncome = log1p(income))
+x_col <- "income"; y_col <- "BikePMT"
+sens_results <- list()
+#hh_df_incv <- hh_df %>% filter(!is.na(Income))
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df_incv, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=BikePMT_hdl,
+                                             update_func=update_func)
+}
+
+BikePMT_st_income <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(BikePMT_st_income, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+#### Freeway Supply Sensitivity
+
+```{r, results="asis"}
+x_col <- "FwyLaneMiPC"; y_col <- "BikePMT"
+sens_results <- list()
+hh_df_incv <- hh_df %>% filter(!is.na(Income))
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df_incv, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=BikePMT_hdl,
+                                             filter_dots = "metro=='metro'")
+}
+
+BikePMT_st_FwyLaneMiPC <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(BikePMT_st_FwyLaneMiPC, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+#### Transit Supply Sensitivity
+
+```{r, results="asis"}
+x_col <- "TranRevMiPC"; y_col <- "BikePMT"
+sens_results <- list()
+hh_df_incv <- hh_df %>% filter(!is.na(Income))
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df_incv, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=BikePMT_hdl,
+                                             filter_dots = "metro=='metro'")
+}
+
+BikePMT_st_TranRevMiPC <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(BikePMT_st_TranRevMiPC, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+### Transit PMT
+
+```{r}
+source("data-raw/TransitPMTModel_df.R")
+
+hh_df <- hh_df %>% mutate(
+  overall="",
+  poppm=D1B * 640,
+  income=HHFAMINCVAL,
+  population_per_sqm=cut3(poppm, c(0, 1000, 5000, 10000, Inf), 
+                            label=c("<1k", "1k-5k", "5k-10k", ">10k")),
+  Income =cut3(income, c(0, 40000, 80000, Inf),
+              label=c("<$40k", "$40k-$80k", ">$80k"))) %>% 
+  filter(!is.na(Income))
+
+```
+
+#### Model specification
+
+The specification for the Transit PMT model has been documented in Task2. Here it is replicated for a quick reference.
+
+```{r}
+TransitPMT_hdl <- name_list.cols(TransitPMT_hdl, name_cols="metro")
+TransitPMT_hdl$model %>% map(summary)
+```
+
+#### Population Density (D1B) Sensitivity 
+
+```{r, results="asis"}
+x_col <- "D1B"; y_col <- "TransitPMT"
+sens_results <- list()
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=TransitPMT_hdl)
+}
+
+TransitPMT_st_D1B <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(TransitPMT_st_D1B, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+#### Household AADVMT Sensitivity 
+
+```{r, results="asis"}
+x_col <- "AADVMT"; y_col <- "TransitPMT"
+sens_results <- list()
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df_incv, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=TransitPMT_hdl,
+                                             update_func=update_func)
+}
+
+BikePMT_st_income <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(BikePMT_st_income, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+#### Household Income Sensitivity 
+
+```{r, results="asis"}
+update_func <- . %>% mutate(LogIncome = log1p(income))
+x_col <- "income"; y_col <- "TransitPMT"
+sens_results <- list()
+hh_df_incv <- hh_df %>% filter(!is.na(Income))
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df_incv, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=TransitPMT_hdl,
+                                             update_func=update_func)
+}
+
+TransitPMT_st_income <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(TransitPMT_st_income, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+#### Freeway Supply Sensitivity
+
+```{r, results="asis"}
+x_col <- "FwyLaneMiPC"; y_col <- "TransitPMT"
+sens_results <- list()
+hh_df_incv <- hh_df %>% filter(!is.na(Income))
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df_incv, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=TransitPMT_hdl,
+                                             filter_dots = "metro=='metro'")
+}
+
+TransitPMT_st_FwyLaneMiPC <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(TransitPMT_st_FwyLaneMiPC, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+#### Transit Supply Sensitivity
+
+```{r, results="asis"}
+x_col <- "TranRevMiPC"; y_col <- "TransitPMT"
+sens_results <- list()
+hh_df_incv <- hh_df %>% filter(!is.na(Income))
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df_incv, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=TransitPMT_hdl,
+                                             filter_dots = "metro=='metro'")
+}
+
+TransitPMT_st_TranRevMiPC <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(TransitPMT_st_TranRevMiPC, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+### Walk PMT
+
+```{r}
+source("data-raw/WalkPMTModel_df.R")
+
+hh_df <- hh_df %>% mutate(
+  overall="",
+  poppm=D1B * 640,
+  income=HHFAMINCVAL,
+  population_per_sqm=cut3(poppm, c(0, 1000, 5000, 10000, Inf), 
+                            label=c("<1k", "1k-5k", "5k-10k", ">10k")),
+  Income =cut3(income, c(0, 40000, 80000, Inf),
+              label=c("<$40k", "$40k-$80k", ">$80k"))) %>% 
+  filter(!is.na(Income))
+
+```
+
+#### Model specification
+
+The specification for the Bike PMT model has been documented in Task2. Here it is replicated for a quick reference.
+
+```{r}
+WalkPMT_hdl <- name_list.cols(WalkPMT_hdl, name_cols="metro")
+WalkPMT_hdl$model %>% map(summary)
+```
+
+#### Population Density (D1B) Sensitivity 
+
+```{r, results="asis"}
+x_col <- "D1B"; y_col <- "WalkPMT"
+sens_results <- list()
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=WalkPMT_hdl)
+}
+
+WalkPMT_st_D1B <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(WalkPMT_st_D1B, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+#### Household AADVMT Sensitivity 
+
+```{r, results="asis"}
+x_col <- "AADVMT"; y_col <- "WalkPMT"
+sens_results <- list()
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df_incv, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=WalkPMT_hdl,
+                                             update_func=update_func)
+}
+
+WalkPMT_st_income <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(WalkPMT_st_income, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+#### Household Income Sensitivity 
+
+```{r, results="asis"}
+update_func <- . %>% mutate(LogIncome = log1p(income))
+x_col <- "income"; y_col <- "WalkPMT"
+sens_results <- list()
+hh_df_incv <- hh_df %>% filter(!is.na(Income))
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df_incv, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=WalkPMT_hdl,
+                                             update_func=update_func)
+}
+
+WalkPMT_st_income <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(WalkPMT_st_income, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+#### Freeway Supply Sensitivity
+
+```{r, results="asis"}
+x_col <- "FwyLaneMiPC"; y_col <- "WalkPMT"
+sens_results <- list()
+hh_df_incv <- hh_df %>% filter(!is.na(Income))
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df_incv, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=WalkPMT_hdl,
+                                             filter_dots = "metro=='metro'")
+}
+
+WalkPMT_st_FwyLaneMiPC <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(WalkPMT_st_FwyLaneMiPC, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+#### Transit Supply Sensitivity
+
+```{r, results="asis"}
+x_col <- "TranRevMiPC"; y_col <- "WalkPMT"
+sens_results <- list()
+hh_df_incv <- hh_df %>% filter(!is.na(Income))
+for (grouping in c("overall", "population_per_sqm", "Income", "DevelopmentType")) {
+  segment_cols <-  c("metro", grouping)
+  sens_results[[grouping]] <- do_sensitivity(hh_df_incv, segment_cols = segment_cols,
+                                             x_col=x_col, y_col=y_col, model_df=WalkPMT_hdl,
+                                             filter_dots = "metro=='metro'")
+}
+
+WalkPMT_st_TranRevMiPC <- bind_rows(map(sens_results, "data")) %>% 
+  txtRound(3, excl.cols=1:5)
+
+pp_sensitivity(WalkPMT_st_TranRevMiPC, x_col=x_col, y_col=y_col)
+```
+
+```{r}
+for (p in map(sens_results, "plot")) print(p)
+```
+
+## Phase II
+
+The models (AADVMT model, trip frequency model and person mile traveled model for bike, walk, and transit) are applied to RVMPO data using the visioneval framework with RSPM/VisionEval sythesized households and supplemental block group built environment level inputs. Below are the model prediction outputs, and compared with related results from OHAS for RVMPO.  Comparing with RSPM VMT/Alt mode trips output is to be accomplished. 
+
+
+### Predictions from the New Models
+
+```{r}
+p_load(rhdf5)
+
+TestDir <- normalizePath(".")
+vetdm_ds <- file.path(TestDir, "datastore.h5")
+#h5ls(vetdm_ds)
+tdm_rvhh_ls <- h5read(file = vetdm_ds, 
+                      name = "2010/Household")
+tdm_rvhh_df <- data.frame(tdm_rvhh_ls)
+tdm_rvbz_ls <- h5read(file = vetdm_ds, 
+                      name = "2010/Bzone")
+tdm_rvbz_df <- data.frame(tdm_rvbz_ls)
+
+tdm_rvhhbz_df  <- tdm_rvhh_df %>% 
+  left_join(tdm_rvbz_df)
+
+tdm_rvhhbz_df <- tdm_rvhhbz_df %>% 
+  mutate(
+        mpo="RVMPO",
+        poppm=D1B,
+        population_per_sqm=cut3(poppm, c(0, 1000, 5000, 10000, Inf), 
+                                  label=c("<1k", "1k-5k", "5k-10k", ">10k")),
+        Income3 =cut3(Income, c(0, 40000, 80000, Inf),
+                    label=c("<$40k", "$40k-$80k", ">$80k"))) %>% 
+        filter(!is.na(Income3))
+
+summarize_results <- . %>% 
+  summarize(n=n(),
+            AADVMT=mean(AADVMT),
+            BikeTrips=mean(BikeTrips),
+            WalkTrips=mean(WalkTrips),
+            TransitTrips=mean(TransitTrips),
+            BikePMT=mean(BikePMT),
+            WalkPMT=mean(WalkPMT),
+            TransitPMT=mean(TransitPMT))
+
+preds_all <- bind_rows(list(
+  tdm_rvhhbz_df %>% 
+    group_by(Category=mpo) %>% 
+    summarize_results %>% 
+    mutate(by="Overall"),
+  
+  tdm_rvhhbz_df %>% 
+    group_by(Category=DevType) %>% 
+    summarize_results %>% 
+    mutate(by="DevelopmentType"),
+  
+  tdm_rvhhbz_df %>% 
+    group_by(Category=Income3) %>% 
+    summarize_results %>% 
+    mutate(by="Income"),
+  
+  tdm_rvhhbz_df %>% 
+    group_by(Category=population_per_sqm) %>% 
+    summarize_results %>% 
+    mutate(by="Popuplation per Square Mile")
+))
+pp_preds <- function(df) {
+  group_labels <- df %>% 
+    group_by(by) %>% 
+    summarize(n=n()) %>% 
+    ungroup() %>% 
+    slice(match(unique(df$by), by))
+
+  htmlTable(
+    df %>% dplyr::select(-by),
+    rnames = FALSE,
+    align="lrr rrr rrr",
+    rgroup = paste(group_labels$by),
+    n.rgroup = group_labels$n,
+    cgroup = c("", "Trips", "PMT"),
+    n.cgroup = c(3, 3, 3)
+  )
+}
+
+pp_preds(preds_all %>% txtRound(3, excl.cols=c(1, 2, 10)))
+```
+
+### RSPM Predictions
+TODO
+
+### OHAS
+
+Those are the weighted average trip and person mile traveled per household by mode from the 2012 Oregon Household Activity Survey for RVMPO.
+
+```{r}
+p_load(readr)
+oahs_hh <- read_csv("../data/OHAS/hh.csv")
+rv_hh <- oahs_hh %>% 
+  filter(AREA == 14) %>% 
+  dplyr::select(SAMPN, INCOME, HXCORD, HYCORD, hhwgt=HHWGT) %>% 
+  mutate(income=ifelse(INCOME==99, NA, 0),
+         income=ifelse(INCOME==1, (     0 + 14999)/2, income),
+         income=ifelse(INCOME==2, ( 15000 + 24999)/2, income),
+         income=ifelse(INCOME==3, ( 25000 + 34999)/2, income),
+         income=ifelse(INCOME==4, ( 35000 + 49999)/2, income),
+         income=ifelse(INCOME==5, ( 50000 + 74999)/2, income),
+         income=ifelse(INCOME==6, ( 75000 + 99999)/2, income),
+         income=ifelse(INCOME==7, (100000 +149999)/2, income),
+         income=ifelse(INCOME==8, (150000 +300000)/2, income)
+         )
+
+oahs_trips <- read_csv("../data/OHAS/trip.csv")
+
+oahs_trips <- oahs_trips %>% 
+  mutate(mode=ifelse(MODE==1, "Walk", ""),
+         mode=ifelse(MODE==2, "Bike", mode),
+         mode=ifelse(MODE==5, "Transit", mode),
+         mode=ifelse(MODE>2 & MODE<5, "Driving", mode)) %>% 
+  filter(mode != "" & !is.na(mode))
+  
+rv_hh_modes <- oahs_trips %>% 
+  group_by(SAMPN, mode) %>% 
+  summarize(trips=n(),
+            dist_miles=sum(DistanceRoute)/5280)
+
+rv_modes <- rv_hh %>%
+  mutate(totwgt=sum(hhwgt, na.rm=TRUE), nhhs=n()) %>% 
+  left_join(rv_hh_modes) %>% 
+  #mutate(trips=ifelse(is.na(trips), 0, trips),
+  #       dist_miles=ifelse(is.na(dist_miles), 0, dist_miles)) %>% 
+  group_by(mode) %>% 
+  summarize(#avg_trips=mean(trips, na.rm=TRUE),
+            #avg_dist=mean(dist_miles, na.rm=TRUE),
+            n=first(nhhs),
+            trips=sum(trips * hhwgt, na.rm=TRUE)/first(totwgt),
+            PMT=sum(dist_miles * hhwgt, na.rm=TRUE)/first(totwgt)) %>% 
+  filter(!is.na(mode)) %>% 
+  mutate(Category="RVMPO", by="Overall")
+
+rv_modes_income <- rv_hh %>%
+  filter(!is.na(income)) %>% 
+  mutate(Income3 =cut3(income, c(0, 40000, 80000, Inf),
+                       label=c("<$40k", "$40k-$80k", ">$80k"))) %>% 
+  group_by(Income3) %>% 
+  mutate(totwgt=sum(hhwgt, na.rm=TRUE), nhhs=n()) %>% 
+  left_join(rv_hh_modes) %>% 
+  group_by(Category=Income3, mode) %>% 
+  summarize(#avg_trips=mean(trips, na.rm=TRUE),
+            #avg_dist=mean(dist_miles, na.rm=TRUE),
+            n=first(nhhs),
+            trips=sum(trips * hhwgt, na.rm=TRUE)/first(totwgt),
+            PMT=sum(dist_miles * hhwgt, na.rm=TRUE)/first(totwgt)) %>% 
+  mutate(by="Income") %>% 
+  filter(!is.na(mode))
+
+obs_all <- bind_rows(
+rv_modes %>% 
+  dplyr::select(-PMT) %>% 
+  spread(mode, trips) %>% 
+  left_join(
+    rv_modes %>% 
+      dplyr::select(-trips, -n) %>% 
+      spread(mode, PMT),
+    by=c("Category", "by"),
+    suffix=c("T", "M")
+   ),
+
+rv_modes_income %>% 
+  dplyr::select(-PMT) %>% 
+  spread(mode, trips) %>% 
+  left_join(
+    rv_modes_income %>% 
+      dplyr::select(-trips, -n) %>% 
+      spread(mode, PMT),
+    by=c("Category", "by"),
+    suffix=c("T", "M")
+   )
+)
+
+pp_obs <- function(df) {
+  group_labels <- df %>% 
+    group_by(by) %>% 
+    summarize(n=n()) %>% 
+    ungroup() %>% 
+    slice(match(unique(df$by), by))
+
+  htmlTable(
+    df %>% dplyr::select(-by),
+    rnames = FALSE,
+    align="lr rrrr rrrr",
+    rgroup = paste(group_labels$by),
+    n.rgroup = group_labels$n,
+    cgroup = c("", "Trips", "PMT"),
+    n.cgroup = c(2, 4, 4)
+  )
+}
+
+pp_obs(obs_all %>% txtRound(3, excl.cols=1:3))
+
+```
+
+## Phase III
+
+All modules in the VETravelDemand R package have been tested to work with [the develop branch of VisionEval](https://github.com/gregorbj/VisionEval/tree/develop) using [the RVMPO data](https://travis-ci.org/cities-lab/VETravelDemand). Automated testing (continuous integration) have been put in place to make sure the code/package passes all tests and is in working condition with the latest version of VisionEval all the time. And if anything breaks automated tests, authors of the packages will be notified through email (see also Task 3).

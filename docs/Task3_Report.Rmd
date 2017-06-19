@@ -1,44 +1,45 @@
 ---
-title: "SPR 788: Task 3 & 4 Updates"
+title: "SPR 788 Task 3: VETravelDemand (VisionEval Travel Demand) Implementation"
 author: "Liming Wang"
-date: "3/22/2017"
-output: html_document
+date: "Updated on 5/22/2017"
+output:
+  html_document:
+    toc: true
+    theme: cosmo
+    highlight: textmate
+    mathjax: null
+    toc_depth: 3
+    toc_float:
+      collapsed: false
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_knit$set(root.dir = "../")
-knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=F)
+#knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=F)
 options(scipen=100)
 options(digits=3)
 
 if (!require("pacman")) {install.packages("pacman"); library(pacman)}
-# special installation process for printr as it is not available on CRAN
-if (!require("printr")) install.packages('printr', type = 'source', 
-                                         repos = 'http://yihui.name/xran')
-pacman::p_load(tidyverse)
+#pacman::p_load(tidyverse)
 ```
 
-## Tasks 
+## Task Description
 
-### Task 3: Model implementation
 > PSU researchers shall select an optimal model design from Task 2, based on TAC/OSA input, and implement it using R as a package for the unified RSPM framework. The result will be a new functionality in RSPM that can be applied across several Oregon and national tools. The implementation of the new functionality will be checked in by the PSU researchers to a shared code repository and estimation data properly documented
 
-### Task 4: Mode testing
-> PSU researchers shall apply the newly incorporated mode shift module (in the updated RSPM tool) in the Corvallis Area Metropolitan Planning Organization (CAMPO) to assess how it can inform decision-making and to adjust the model as needed to provide accurate and helpful information.  ODOT staff will assist in assembling the necessary data for sensitivity test.  Initial testing will be documented by the PSU researchers.
+## Status
 
-## Progress
+All sub-tasks in Task 3 have been accomplished and listed below:
 
-### Task 3: VETravelDemand (VisionEval Travel Demand) Implementation
-
-1. [DONE] initial implementation as an R package
-    - Implemented as a module (R Package) for the VisionEval framework that provides functions to predict AADVMT and TFL for transit, walk, and bike
+- [x] initial implementation as a R package
+    - Implemented as a R Package for the VisionEval framework that provides functions to predict AADVMT and Person Mile Travelled (PMT) for transit, walk, and bike
+    - Implemented two modules that predict number of vehicles (Vehicles) and number of drivers (Drivers) for households
     - Following the VisionEval package guidelines and including code, data (estimated model objects with parameters), documents, and tests
 
-1. [DONE] Light-weight implementation
+- [x] Light-weight implementation
     - Utilizing list-column data frames to avoid the need to iterate/loop through segments (i.e., metro and non-metro segments)
-    - Taking advantage of predict() function call of R model objects
-    - Implementation is almost agnostic to the model structure used
-    - Code for the PredictAADVMT function:
+    - Taking advantage of predict() function of R model objects
+    - Implementation is almost agnostic to the model structure used. For example, code for the PredictAADVMT function:
 
 ```{r, eval=F, include=T}
 #=======================================================
@@ -63,7 +64,7 @@ pacman::p_load(tidyverse)
 #' and AADVMT produced by the PredictAADVMT function are to be stored in the
 #' "Household" table.
 #'
-#' Since this table does not exist, the function calculates a LENGTH value for
+#' If this table does not exist, the function calculates a LENGTH value for
 #' the table and returns that as well. The framework uses this information to
 #' initialize the Households table. The function also computes the maximum
 #' numbers of characters in the HhId and Azone datasets and assigns these to a
@@ -71,7 +72,7 @@ pacman::p_load(tidyverse)
 #' datasets in the datastore. All the results are returned in a list.
 #'
 #' @param L A list containing the components listed in the Get specifications
-#' for the module. (Q: what about a model object?)
+#' for the module.
 #' @return A list containing the components specified in the Set
 #' specifications for the module along with:
 #' LENGTH: A named integer vector having a single named element, "Household",
@@ -80,33 +81,63 @@ pacman::p_load(tidyverse)
 #' SIZE: A named integer vector having two elements. The first element, "Azone",
 #' identifies the size of the longest Azone name. The second element, "HhId",
 #' identifies the size of the longest HhId.
-#' @import tidyverse
+#' @import visioneval dplyr purrr tidyr pscl
+#' @importFrom "splines" "ns"
 #' @export
 PredictAADVMT <- function(L) {
-  Model_df <- L$model
-  # colname used for segmenting households ("metro" by default)
-  SegmentCol_vc <- setdiff(names(Model_df), "model")
-  Household_df <- L$Household_df
+  #TODO: get id_name from L or specification?
+  dataset_name <- "Household"
+  id_name <- "HhId"
+  y_name <- "AADVMT"
 
-  stopifnot(SegmentCol_vc %in% names(Household_df))
+  Bzone_df <- data.frame(L$Year[["Bzone"]])
+  stopifnot("data.frame" %in% class(Bzone_df))
 
-  Hh_lcdf <- Household_df %>% group_by_(SegmentCol_vc) %>%
-    nest() %>%
-    left_join(Model_df)
+  Marea_df <- data.frame(L$Year[["Marea"]])
+  stopifnot("data.frame" %in% class(Marea_df))
 
-  Out_df <- Hh_lcdf %>% mutate(HhId=map(data, "HhId"),
-                               AADVMT=map2(model, data, predict, type="response")) %>%
-    unnest(HhId, AADVMT)
-  Out_ls <- list(HhId=Out_df$HhId,
-                 AADVMT=Out_df$AADVMT)
-  #Calculate LENGTH attribute for Household table
+  D_df <- data.frame(L$Year[[dataset_name]])
+  stopifnot("data.frame" %in% class(D_df))
+  D_df <- D_df %>%
+    mutate(LogIncome=log1p(Income),
+           DrvAgePop=HhSize - Age0to14,
+           VehPerDriver=ifelse(Drivers==0 || is.na(Drivers), 0, Vehicles/Drivers),
+           LifeCycle = as.character(LifeCycle),
+           LifeCycle = ifelse(LifeCycle=="01", "Single", LifeCycle),
+           LifeCycle = ifelse(LifeCycle %in% c("02"), "Couple w/o children", LifeCycle),
+           LifeCycle = ifelse(LifeCycle %in% c("00", "03", "04", "05", "06", "07", "08"), "Couple w/ children", LifeCycle),
+           LifeCycle = ifelse(LifeCycle %in% c("09", "10"), "Empty Nester", LifeCycle)
+    ) %>%
+    left_join(Bzone_df, by="Bzone") %>%
+    crossing(Marea_df)
 
-  Out_ls$LENGTH <- numeric(0)
-  Out_ls$LENGTH["Household"] <- length(Out_ls$HhId)
-  #Calculate SIZE attributes for 'Azone' and 'HhId'
-  Out_ls$SIZE <- numeric(0)
-  Out_ls$SIZE["HhId"] <- max(nchar(Out_ls$HhId))
-  Out_ls$SIZE["AADVMT"] <- max(nchar(Out_ls$AADVMT))
+  D_df <- D_df %>% mutate_if(is.factor, as.character)
+
+  #D_df <- D_df %>%
+  #  crossing(Marea_df, by="Marea")
+
+  #load("data/AADVMTModel_df.rda")
+  Model_df <- AADVMTModel_df
+
+  # find cols used for segmenting households ("metro" by default)
+  SegmentCol_vc <- setdiff(names(Model_df), c("model", "step", "post_func", "bias_adj"))
+
+  # segmenting columns must appear in D_df
+  stopifnot(all(SegmentCol_vc %in% names(D_df)))
+
+  Preds <- do_predictions(Model_df, D_df,
+                 dataset_name, id_name, y_name, SegmentCol_vc)
+
+  # fill NA with 0s - produced with negative predictions before inversing power transformation
+  Preds <- Preds %>%
+    mutate(y=ifelse(is.na(y) | y < 0, 0, y))
+
+  Out_ls <- initDataList()
+  Out_ls$Year$Household <-
+    list(
+      AADVMT = -1
+    )
+  Out_ls$Year$Household$AADVMT <- Preds[["y"]]
 
   #Return the list
   Out_ls
@@ -114,26 +145,16 @@ PredictAADVMT <- function(L) {
 
 ```
 
-1. [DONE] Module testing
-    - Implemented in tests/test_modules.R
-    - All functions implemented in the module tested with 2009 NHTS + SLD data
 
-1. [TODO] Further modifications in response to changes in VisionEval
-    - Variable name registration
-    - Changes in data structure return from data store
+- [x] testing
+    - Implemented in tests/test.R, utilizing the testModule() function implemented in VisionEval
+    - All modules implemented in the package tested with RVMPO data using estimated coefficients with the NHTS + SLD data
+    - Package check and tests automated with [Travis-CI](https://travis-ci.org/cities-lab/VETravelDemand) (see also Task 4)
 
-1. [TODO] Release module as a public repository
-    - Package available at a private repository https://github.com/cities-lab/RSPM_ModeChoice/module, may split into a separate repository
-    - Current tests using 2009 NHTS joined with SLD, which may violate FHWA's confidentality agreement if released
-    - Test data to be replaced with RVMPO synthesized households joined with SLD (see below)
+- [x] Further modifications in response to changes in VisionEval
+    - Variable name unification with existing VE modules implemented by Brian (VELandUse and VETransportSupply)
+    - Utilize the data structure in hdf5 data store on the develop branch of VisionEval
 
-### Task 4: Model testing
-1. [DONE] RVMPO Test region (switched from CAMPO)
-    - Data for the RVMP baseline scenario retrieved
-    - Uses block group geography; Brian helped assign synthesized households to block groups
-    - Utilizes RVMPO place types designation (TAZ)
-
-1. [Ongoing] Phased model testing
-    i. Run VETravelDemand module alone with RVMPO base year data + SLD information; predictions will be compared with OTAS/HPMS and RSPM VMT prediction;
-    i. Run VETravelDemand module alone with RVMPO base year data + place types and selected independent variables (e.g. population and employment density); Any missing 5D independent variables are to be extrapolated from place types densignation of block groups; predictions will be compared with OTAS/HPMS and RSPM prediction (VMT);
-    i. Run VETravelDemand module along with other RSPM modules (requiring a wrapper that enables VisionEval modules to run with RSMP modules)
+- [x] Release module as a public repository
+    - Package released as a public repository: https://github.com/cities-lab/VETravelDemand
+    - Automated testing with RVMPO synthesized households
