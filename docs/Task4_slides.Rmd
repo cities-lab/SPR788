@@ -1,0 +1,144 @@
+---
+title: "SPR 788 Incorporate Travel Mode Choices in the Regional Strategic Planning Model (RSPM) Tool"
+subtitle: "June 2017 TAC Meeting"
+author: "Liming Wang"
+date: "6/20/2017"
+output:
+  xaringan::moon_reader:
+    seal: yes
+    nature:
+      highlightStyle: github
+
+---
+
+<style>
+  @page {
+    size: 1210px 681px;
+    margin: 0;
+  }
+  
+  @media print {
+    .remark-slide-scaler {
+      width: 100% !important;
+      height: 100% !important;
+      transform: scale(1) !important;
+      top: 0 !important;
+      left: 0 !important;
+    }
+  }
+</style>
+
+```{r setup, include=F}
+if (!require("pacman")) {install.packages("pacman"); library(pacman)}
+pacman::p_load(dplyr, ggplot2, knitr, tidyr, readxl, stringr, readr, scales, pander)
+
+knitr::opts_knit$set(root.dir = "../")
+knitr::opts_chunk$set(message=FALSE, warning=F, echo=F)
+options(width = 2000)
+panderOptions('round', 2)
+panderOptions('keep.trailing.zeros', TRUE)
+```
+
+```{r functions, include=FALSE}
+# A function for captioning and referencing images
+fig <- local({
+    i <- 0
+    ref <- list()
+    list(
+        cap=function(refName, text) {
+            i <<- i + 1
+            ref[[refName]] <<- i
+            paste("Figure ", i, ": ", text, sep="")
+        },
+        ref=function(refName) {
+            ref[[refName]]
+        })
+})
+```
+
+# Outline
+
+- Task 3 Model Implementation Updates
+- Task 4 Application Testing Report
+- Future work
+
+---
+
+# Task 3 Description
+
+> PSU researchers shall select an optimal model design from Task 2, based on TAC/OSA input, and implement it using R as a package for the unified RSPM framework. The result will be a new functionality in RSPM that can be applied across several Oregon and national tools. The implementation of the new functionality will be checked in by the PSU researchers to a shared code repository and estimation data properly documented
+
+---
+
+# Task 3 Status
+
+- All sub-tasks in Task 3 have been accomplished
+    - [x] Light-weight implementation with the unified VisionEval framework
+        - Models for AADVMT and PMT and TFL for Bike, Walk, and Transit
+        - Drivers and Vehicles model
+        - Working together with the VELandUse and VETransportSupply implemented by Brian Gregor
+    - [x] Implementation organized as a R package, VETravelDemand, following R package structure and VisionEval coding and documentation guidelines
+    - [x] [Checked in and released as a public GitHub repository](https://github.com/cities-lab/VETravelDemand)
+    - [x] Testing script in place (tests/test.R) and automated with [Travis-CI] (https://travis-ci.org/cities-lab/VETravelDemand)
+
+---
+
+# Performance of current implementation
+
+- Speed: running all modules for RVMPO takes about a minute (66s)
+- Size: currently at 25.4MB, the model objects for 9 models take up most of the space
+    - maybe room for further stripping the model objects without stopping the predict() call
+
+---
+
+# Task 4 Description
+
+> PSU researchers shall apply the newly incorporated mode shift module (in the updated RSPM tool) in the Rogue Valley Metropolitan Planning Organization (RVMPO) to assess how it can inform decision-making and to adjust the model as needed to provide accurate and helpful information.  ODOT staff will assist in assembling the necessary data for sensitivity test.  Initial testing will be documented by the PSU researchers.
+
+---
+
+# Three Phases of Task 4
+
+> **Phase 1**: Test modules on their own using SLD/NHTS data used in estimation;  Test module sensitivity, vary SLD/NHTS inputs one at a time – elasticity response vs. Literature  VMT, PMT by mode, total and split by HH income, density, urban form groups
+> 
+> **Phase 2**: Test module in RVMPO RSPM (using a code wrapper and supplemental RVMPO block group place type inputs) comparing current vs. new outputs, VMT/Alt mode trips at MPO/district geographies (maps) and HH attributes (place types, income, …) – tests full model performance improvement over existing tool using built form variables
+> 
+> **Phase 3**: Test module in VisionEval  (written up to 1st call of this module) – tests to see if module will work in future VisionEval tool
+
+
+# Task 4 Status
+
+- Phase 1: https://cities-lab.github.io/SPR788/Task4_Report.html#phase_i
+    - Variable selection following the [variable cheatsheet](https://cities-lab.github.io/SPR788/RSPM-TFLmodelVariables_May2017.pdf) that Tara Weidner put together
+    - Process following the [sensitivity tests](https://cities-lab.github.io/SPR788/GreenSTEP_Model_Doc-SensTestingDRAFT.pdf) Brian Gregor did for GreenSTEP
+- Phase 2: https://cities-lab.github.io/SPR788/Task4_Report.html#phase_ii
+- Phase 3: https://cities-lab.github.io/SPR788/Task4_Report.html#phase_iii
+
+# Task 4 TODO
+
+- Phase 1
+    - Revise the report and compare with elasticities in the literature and GreenSTEP
+- Phase 2 
+    - Map VETravelDemand predictions by geographies (districts)
+    - Compare VETravelDemand predictions with those of VEAltModes and the RSPM household travel model
+    - Summarize OHAS observated travel by density and development type and compare them with VETravelDemand predictions
+    - Revise the section of the report accordingly
+
+---
+
+# Future work
+
+- Task 7 Acceptance Testing and Review is being added
+- Publications
+    - Journal article Development of Multimodal for RSPM, currently under review for publication at Journal of Transport and Land Use
+    - Two abstracts accepted for presentation at ACSP, and manuscripts in preparation for submission to TRB annual meeting
+- The sister project on intergating emerging modes with RSPM
+    - Data collection over the summer
+
+---
+    
+# Task 7 Acceptance Testing and Review
+
+- Integrate the new RSPM functionality in the long term VisionEval codebase 
+- Subject it to a review process for acceptance into the VisionEval Github repository
+- Compile the #788 RSPM module code changes into the VisionEval submittal format, including any acceptance testing and associated documentation
