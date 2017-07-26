@@ -1012,6 +1012,7 @@ ct_results <- bind_rows(list(
 )
 
 ```
+
 ### Comparison of Spatial Distribution (Census Tract)
 
 #### VMT
