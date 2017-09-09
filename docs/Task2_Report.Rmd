@@ -2,7 +2,8 @@
 title: "SPR 788: Task 2 Model Design and Estimation Report (Updated Draft)"
 author: "Liming Wang"
 date: "03/20/2017"
-output: html_document
+output: 
+  bookdown::html_document2
 ---
 
 ```{r setup, include=FALSE}
@@ -13,15 +14,55 @@ options(digits=3)
 #setwd("~/RSPM_ModeChoice/docs")
 
 if (!require("pacman")) {install.packages("pacman"); library(pacman)}
-# special installation process for printr as it is not available on CRAN
-if (!require("printr")) install.packages('printr', type = 'source', 
-                                         repos = 'http://yihui.name/xran')
-pacman::p_load("gridExtra", "knitr", "moments", "pastecs", "tidyverse",
-               "printr", "scales", "magrittr", "stargazer", "pander",
-               "splines", modelr)
+
+pacman::p_load(gridExtra, knitr, moments, pastecs, tidyverse,
+               scales, magrittr, stargazer, pander,
+               splines, modelr, stringr)
 ```
 
 ```{r functions, include=FALSE}
+outpu_format <- opts_knit$get("rmarkdown.pandoc.to") #html/latex
+br <- ifelse(outpu_format=="html", "<br>", "\n")
+
+dust_model <- function(x, caption, type=outpu_format)
+  dust(x, 
+     caption=caption,
+     glance_foot = TRUE,
+     glance_stats = c("df", "logLikehood"),
+     byrow = TRUE,
+     float = FALSE)  %>% 
+  sprinkle(cols = 2:4,
+           round = 3) %>% 
+  sprinkle(cols = "p.value", fn = quote(pvalString(value))) %>% 
+  sprinkle_colnames("Term", "Coefficient", "std error", "T-statistic", "P-value") %>% 
+  sprinkle(rows = 1, border = "top") %>%
+  sprinkle(cols = c(2, 6), round = 2, na_string = "",
+           part = "foot") %>%
+  sprinkle(rows = 1, border = "top", part = "foot") %>% 
+  sprinkle_print_method(type)
+
+tight_stargazer <- function(..., title ="", 
+          type = outpu_format,
+          dep.var.caption = "",
+          dep.var.labels.include=F,
+          column.labels = NULL,
+          #object.names = T, 
+          model.numbers=F,
+          no.space=T,
+          omit.stat = c("lr"),
+          report = "vc*s",
+          table.placement="h") {
+  stargazer(..., title=title, type=type, 
+            dep.var.caption=dep.var.caption,
+            dep.var.labels.include=dep.var.labels.include,
+            model.numbers=model.numbers,
+            column.labels=column.labels,
+            no.space=no.space,
+            omit.stat=omit.stat,
+            report=report, header=FALSE,
+            table.placement = table.placement)
+}
+
 # A function for captioning and referencing images
 fig <- local({
     i <- 0
@@ -122,6 +163,12 @@ hh_vv <- load_or_source(hh_vv_df_file, "hh_vv")
 mm.df <- hh.df %>% 
   segment_data("metro") %>% 
   name_list.cols(name_cols=c("metro"))
+
+seed <- 100
+set.seed(seed)
+#mm.df <- hh.df %>% 
+#  kfold_partition_by_segment("metro") %>% 
+#  name_list.cols(name_cols=c("metro", ".id"))
 ```
 
 The 2009 NHTS included `r prettyNum(nrow(hh.df), big.mark=",")` households, `r prettyNum(nrow(pp.df), big.mark=",")` household members and `r prettyNum(nrow(dd.df), big.mark=",")` trips. 
@@ -238,6 +285,7 @@ D4c            | [SLD] Aggregate frequency of transit service within 0.25 miles 
 D4d            | [SLD] Aggregate frequency of transit service (D4c) per square mile
 Fwylnmicap     | [TTI] 2010 Urbanized Area freeway lane miles per capita
 Tranmilescap   | [NTD] 2009 Urbanized Area annual vehicle revenue miles per capita
+ACCESS         | [Place Type] Accessibility measure ``ACCESS = (2 * EMPTOT_2 * TOTPOP10_5) / 10000 * (EMPTOT_2 + TOTPOP10_5)``, where ``EMPTOT_2`` is employment within 2-mile radius, and ``TOTPOP10_5`` is total 2010 population within 5-mile radius
 "
 #Fwylnmi        | [TTI] 2010 Urbanized Area freeway lane miles
 #UZAASLM        | [TTI] 2010 Urbanized Area arterial street lane miles
@@ -264,7 +312,8 @@ cat(tabl) # output the table in a format good for HTML/PDF/docx conversion
 dd.df %>% group_by(mode) %>% 
   summarize(n=n()) %>% 
   mutate('%'=100 * n/sum(n)) %>% 
-  arrange(desc(n))
+  arrange(desc(n)) %>% 
+  pp_df()
 ```
 
 5. Shares of trips by trip purpose and mode
@@ -274,7 +323,8 @@ dd.df %>% group_by(TRIPPURP) %>%
   group_by(mode, add=TRUE) %>% 
   summarize(n=n(), `%`=n/first(N)*100) %>% 
   ungroup() %>% 
-  arrange(TRIPPURP, mode)
+  arrange(TRIPPURP, mode) %>% 
+  pp_df()
 ```
 
 ```{r trippurp.v.trptrans, echo=FALSE, fig.cap=fig$cap("trippurp.v.trptrans", "Shares of trips by trip purpose and mode")}
@@ -304,20 +354,19 @@ dd.df %>% #filter(TRPMILES<trpmiles.cutoff) %>% ## arbitrary cutoff
             `99%`=quantile(TRPMILES, probs=0.99),
             max =max(TRPMILES),
             mean=mean(TRPMILES), 
-            sd=sd(TRPMILES))
+            sd=sd(TRPMILES)) %>% 
+  pp_df()
 ```
 
 8. Exclude trips by vehicles w/ commercial license plates and with distance above 99 percentile
 ```{r, include=FALSE}
 dd.df %>%
   group_by(mode) %>%
-  summarize(n=n()) %>% mutate('%'=100*n/sum(n))
+  summarize(n=n()) %>% mutate('%'=100*n/sum(n))  %>% 
+  pp_df()
 ```
 Given the skewedness of trip distance, a cutoff of 99-percentile of trip distance for each mode is used. Results below are after applying the cutoff.
 
-```{r, echo=FALSE}
-#hh.df
-```
 
 9. Descriptives of total household travel distance (miles) by mode used:
 ```{r, echo=FALSE}
@@ -332,7 +381,8 @@ hh.x.mode_dd %>% group_by(mode) %>%
             `99%`=quantile(td.miles, probs=0.99),
             max=max(td.miles),
             mean=mean(td.miles), 
-            sd=sd(td.miles))
+            sd=sd(td.miles))  %>% 
+  pp_df()
 ```
 
 10. Descriptives of household travel time (minutes) by mode used:
@@ -347,7 +397,8 @@ hh.x.mode_dd %>% group_by(mode) %>%
             `99%`=quantile(tt.mins, probs=0.99),
             max=max(tt.mins),
             mean=mean(tt.mins), 
-            sd=sd(tt.mins))
+            sd=sd(tt.mins))  %>% 
+  pp_df()
 ```
 
 11. Boxplot of household travel distance (mile) and time (minutes) by mode
@@ -477,7 +528,7 @@ GreenSTEP focuses on Daily Vehicle Mile Travel (VMT) by drivers in its household
 
 $P(Daily VMT==0) = logit(DrvAgePop + LogIncome + Htppopdn + Age65Plus + Hhvehcnt + ZeroVeh + Tranmilescap + Urban:Tranmilescap)$, and
 
-```{r}
+```{r greenstep1, results="asis"}
 fmlas <- list(    metro=~glm(ZeroDVMT ~ DrvAgePop + LogIncome + HTPPOPDN + Age65Plus + HHVEHCNT +
                                ZeroVeh + Tranmilescap, 
                               data=., na.action=na.exclude, family=binomial),
@@ -487,7 +538,8 @@ fmlas <- list(    metro=~glm(ZeroDVMT ~ DrvAgePop + LogIncome + HTPPOPDN + Age65
 
 res.gs_0dvmt <- mm.df %>%
   add_formulas(fmlas, colname="formula") %>% 
-  mutate(model = map2(train, formula, est_model),
+  mutate(step = 1, 
+         model = map2(train, formula, est_model),
          #df.model_df = map2(model, train, get_all_vars),
          #preds = map2(df.model_df, model, modelr::add_predictions),
          preds = map2(model, test, predict, type="response"),
@@ -498,25 +550,31 @@ res.gs_0dvmt <- mm.df %>%
   dplyr::select(-c(test, train)) %>% 
   I() #name_list.cols(name_col="metro")
 
-res.gs_0dvmt$post_func <- list(function(p) 1 - rbinom(p, 1, p))
+# func for post process (transform, etc)
+res.gs_0dvmt$post_func  <- list(function(p) 1 - rbinom(p, 1, p))
 
 #res.gs_0dvmt$model %>% map(pp.fit)
-res.gs_0dvmt$model %>% map(summary)
+#res.gs_0dvmt$model %>% map(summary)
 
 #res.gs_0dvmt$model %>% map_df(broom::glance)
+model_labels <- str_replace(res.gs_0dvmt$metro, "[_]", "")
+tight_stargazer(res.gs_0dvmt$model, column.labels = model_labels, 
+                model.numbers=T, 
+                title="Binomial Logit Models of Zero DVMT")
 ```
 ```{r, echo=FALSE}
 res.gs_0dvmt %>% #dplyr::select(-c(model, formula, preds, .id)) %>% 
   group_by(metro) %>% 
   summarize(auc=mean(auc),
-            pseudo.r2=mean(pseudo.r2))
+            pseudo.r2=mean(pseudo.r2)) %>% 
+  pp_df()
 ```
 
 2. DVMT model
 
 $(Daily VMT)^{0.18} = lm(Census\_r + LogIncome + Htppopdn + Hhvehcnt + ZeroVeh + Tranmilescap + Fwylnmicap + DrvAgePop + Age65Plus + Urban + Htppopdn:Tranmilescap)$
 
-```{r, echo=FALSE}
+```{r greenstep2, echo=FALSE, results="asis"}
 #hh.df %<>% mutate(powVMT=DVMT^0.18)
 fmlas <- list(    metro=~lm(I(DVMT^0.18)~CENSUS_R + LogIncome + HTPPOPDN + HHVEHCNT + ZeroVeh + Tranmilescap +
                               Fwylnmicap + DrvAgePop + Age65Plus + HTPPOPDN:Tranmilescap, 
@@ -529,7 +587,8 @@ inv_fun <- function(x, pow=0.18) x^(1/pow)
   
 res.gs_pwdvmt <- mm.df %>%
   add_formulas(fmlas) %>% 
-  mutate(#train = map(train, ~resample_filter(.x, DVMT<quantile(DVMT, .99, na.rm=T))),
+  mutate(step = 2,
+         #train = map(train, ~resample_filter(.x, DVMT<quantile(DVMT, .99, na.rm=T))),
          #test = map(test, ~resample_filter(.x, DVMT<quantile(DVMT, .99, na.rm=T))),
          model = map2(train, formula, est_model),
          #bias.adj = map_dbl(model, calc_nlbias.adj, func=inv_fun),
@@ -537,40 +596,58 @@ res.gs_pwdvmt <- mm.df %>%
          preds = map2(model, test, predict, type="response"),
          preds = map(preds, inv_fun),
          preds = map2(preds, bias.adj, `*`),
+         y = map(test, resample_get, col_name="DVMT"),
          #model = map(model, strip_model),
-         rmse = map2_dbl(preds, map(test, resample_get, col_name="DVMT"), calc_rmse),
+         rmse = map2_dbl(preds, y, calc_rmse),
+         nrmse = map2_dbl(preds, y, calc_nrmse),
          r.squared = map_dbl(map(model, summary), "r.squared")
          ) %>%
-  dplyr::select(-c(test, train)) %>% 
+  dplyr::select(-c(test, train, y)) %>% 
   I() #name_list.cols()
 
-res.gs_pwdvmt$post_func <- list(function(y) y^(1/0.18))
+res.gs_pwdvmt$post_func  <- list(function(y) y^(1/0.18))
 
 #res.gs_pwdvmt$model %>% map(pp.fit)
-res.gs_pwdvmt$model %>% map(summary)
+#res.gs_pwdvmt$model %>% map(summary)
+model_labels <- str_replace(res.gs_0dvmt$metro, "[_]", "")
+tight_stargazer(res.gs_pwdvmt$model, column.labels = model_labels, 
+                model.numbers=T, 
+                title="Power-transformed Regression Models of DVMT (DVMT > 0)")
 ```
 
-```{r, echo=FALSE, results='asis'}
+```{r, echo=FALSE}
 res.gs_pwdvmt %>% #dplyr::select(-c(model, formula, preds, .id)) %>% 
   group_by(metro) %>% 
   summarize(rmse=mean(rmse),
-            r.squared=mean(r.squared))
+            nrmse=mean(rmse),
+            r.squared=mean(r.squared)) %>% 
+  pp_df()
 ```
 
 3. Combined model
 ```{r}
-test <- mm.df %>% transmute(metro=metro, 
-                            HOUSEID=map(test, resample_get, col_name="HOUSEID"),
-                            DVMT=map(test, resample_get, col_name="DVMT"))
-test_preds <- test %>% 
-  left_join(res.gs_0dvmt %>% dplyr::select(metro, preds),  by="metro") %>% 
-  left_join(res.gs_pwdvmt %>% dplyr::select(metro, preds), by="metro", suffix=c(".1", ".2")) %>% 
-  unnest()
+gs_dvmt <- bind_rows(res.gs_0dvmt, res.gs_pwdvmt)
 
-test_preds %>% group_by(metro) %>% 
-  mutate(ZeroDVMT = 1 - rbinom(n(), 1, preds.1),
-         DVMT.pred = preds.2 * ZeroDVMT) %>% 
-  summarize(rmse=rmse(DVMT.pred, DVMT))
+test_df <- mm.df %>% transmute(metro=metro, 
+                               #HOUSEID=map(test, resample_get, col_name="HOUSEID"),
+                               DVMT=map(test, resample_get, col_name="DVMT"))
+test_preds <- mm.df %>% 
+  left_join(gs_dvmt %>% dplyr::select(step, metro, model, post_func),  by="metro") %>% 
+  mutate(preds = map2(model, test, predict, type="response")
+         #preds = map2(preds, post_func, `.y(.x)`)
+         )
+
+test_results <- test_preds %>% 
+  group_by(metro) %>% 
+  summarize(yhat=combine_preds(preds)) %>% 
+  ungroup()
+
+test_results %>% 
+  left_join(test_df, by="metro") %>% 
+  mutate(rmse=map2_dbl(yhat, DVMT, rmse), 
+         nrmse=map2_dbl(yhat, DVMT, calc_nrmse)) %>% 
+  select(-yhat, -DVMT) %>% 
+  pp_df()
 ```
 
 Another related model in GreenSTEP is the household budget model that captures the price elasticity of travel. The budget approach to modeling is based on the perspective that households make their travel decisions within money and time budget constraints. According to Brian's research on historical consumer expenditure survey data, household spending on gasoline and other variable costs is done within a household transportation budget that is relatively stable, as households shift expenses between transportation budget categories when gasoline prices fluctuate. Households will necessarily reduce their travel in direct proportion to the cost increase only when fuel prices or other variable costs increase to the point where it is no longer possible to shift money from other parts of the transportation budget [@gregor]. Brian assumes the transition between inelastic and elastic behavior will not be abrupt unless there is little time for the household to recognize the impact of the cost increases on the budget or respond to the cost increases. If the changes are more gradual, the transition will be less abrupt. Given the focus of GreenSTEP/RSPM on long term forecasting, we would only need to model long run elasticities.
@@ -592,13 +669,13 @@ aadvmt_mm.df <- mm.df %>%
 
 1. Estimated Parameters
 
-```{r, echo=F}
+```{r, echo=F, results="asis"}
 fmlas <- list(metro=~lm(I(AADVMT^0.38) ~ HHSIZE+WRKCOUNT+LogIncome+Age65Plus+ns(log1p(VehPerDriver), 3) +
                           log1p(TRPOPDEN)+log1p(EMPTOT_5)+Tranmilescap+Tranmilescap:D4c+D1B+
-                          D3bpo4+D4b050+D5cr, data= .),
+                          D3bpo4+ACCESS, data= .),
               non_metro=~lm(I(AADVMT^0.38) ~ 
                               DrvAgePop+HHSIZE+WRKCOUNT+CENSUS_R+LogIncome+Age65Plus+ns(log1p(VehPerDriver), 3)+
-                              log1p(TRPOPDEN)+log1p(EMPTOT_5)+D1B+D2A_EPHHM+D1B:D2A_EPHHM+D5ar, data= .))
+                              log1p(TRPOPDEN)+log1p(EMPTOT_5)+D1B+D2A_EPHHM+D1B:D2A_EPHHM+ACCESS, data= .))
 
 inv_fun <- function(x, pow=0.38) x^(1/pow)
 
@@ -608,12 +685,19 @@ aadvmt_lm <- aadvmt_mm.df %>%
          preds=map2(model, test, predict, type="response"),
          preds=map(preds, inv_fun),
          rmse = map2_dbl(preds, map(test, resample_get, col_name="AADVMT"), calc_rmse),
+         nrmse = map2_dbl(preds, map(test, resample_get, col_name="AADVMT"), calc_nrmse),
          r.squared = map_dbl(map(model, summary), "r.squared")
   ) %>%
   dplyr::select(-c(test, train)) %>%
   I() #name_list.cols(name_col=c("metro", ".id"))
 
-aadvmt_lm$model %>% map(summary)
+#aadvmt_lm$model %>% map(summary)
+aadvmt_lm$post_func <- list(inv_fun)
+
+model_labels <- str_replace(aadvmt_lm$metro, "[_]", "")
+tight_stargazer(aadvmt_lm$model, column.labels = model_labels, 
+                model.numbers=T, 
+                title="Power-transformed Regression Models of AADVMT")
 ```
 
 2. Validation
@@ -622,7 +706,9 @@ aadvmt_lm$model %>% map(summary)
 aadvmt_lm %>% #dplyr::select(-c(model, formula, preds, .id)) %>% 
   group_by(metro) %>% 
   summarize(rmse=mean(rmse),
-            r.squared=mean(r.squared))
+            nrmse=mean(nrmse),
+            r.squared=mean(r.squared)) %>% 
+  pp_df()
 ```
 
 3. Sensitivity
@@ -643,13 +729,13 @@ out <- test_sensitivity(hh.df, x_col="Tranmilescap", model.df=aadvmt_lm, segment
 
 fmlas <- list(    metro=~pscl::hurdle(AADVMT.int ~ HHSIZE+WRKCOUNT+CENSUS_R+LogIncome+Age65Plus + ns(log1p(VehPerDriver), 3) + 
                                 log1p(EMPTOT_5)+D1D+D1B:D2A_EPHHM+Tranmilescap+Tranmilescap:D4c+
-                                D3bpo4+D5cr+log1p(D5ar) | HHSIZE+WRKCOUNT+LogIncome+Age65Plus + ns(log1p(VehPerDriver), 3) + 
+                                D3bpo4+ACCESS | HHSIZE+WRKCOUNT+LogIncome+Age65Plus + ns(log1p(VehPerDriver), 3) + 
                                 log1p(TRPOPDEN)+D1D+D1B:D2A_EPHHM, 
                               data=., na.action=na.omit, dist = "negbin"),
               non_metro=~pscl::hurdle(AADVMT.int ~ HHSIZE+WRKCOUNT+CENSUS_R+LogIncome+Age65Plus+ns(log1p(VehPerDriver), 3)+ 
-                              log1p(TRPOPDEN)+log1p(EMPTOT_5)+D1D+D1B:D2A_EPHHM+log1p(D5ar) | 
+                              log1p(TRPOPDEN)+log1p(EMPTOT_5)+D1D+D1B:D2A_EPHHM+ACCESS | 
                                 WRKCOUNT+CENSUS_R+LogIncome+Age65Plus+ns(log1p(VehPerDriver), 3) + 
-                              log1p(EMPTOT_5)+D1B:D2A_EPHHM+D5cr, 
+                              log1p(EMPTOT_5)+D1B:D2A_EPHHM+ACCESS, 
                                   data=., na.action=na.omit, dist = "negbin"))
 
 aadvmt_hdl <- aadvmt_mm.df %>%
@@ -657,12 +743,17 @@ aadvmt_hdl <- aadvmt_mm.df %>%
   mutate(model = map2(train, formula, est_model),
          preds = map2(model, test, predict, type="response"),
          pseudo.r2 = map_dbl(model, calc_pseudo.r2),
+         nrmse = map2_dbl(preds, map(test, resample_get, col_name="AADVMT"), calc_nrmse),
          rmse = map2_dbl(preds, map(test, resample_get, col_name="AADVMT"), calc_rmse)
          ) %>%
   dplyr::select(-c(test, train)) %>% 
   I() #name_list.cols()
 
+model_labels <- str_replace(aadvmt_hdl$metro, "[_]", "")
 aadvmt_hdl$model %>% map(summary)
+#tight_stargazer(aadvmt_hdl$model, column.labels = model_labels, 
+#                model.numbers=T, 
+#                title="Hurdle Models of AADVMT")
 ```
 
 2. Model goodness-of-fit and Validation
@@ -671,7 +762,9 @@ aadvmt_hdl$model %>% map(summary)
 aadvmt_hdl %>% #dplyr::select(-c(model, preds))
   group_by(metro) %>% 
   summarize(rmse=mean(rmse),
-            pseudo.r2=mean(pseudo.r2))
+            nrmse=mean(nrmse),
+            pseudo.r2=mean(pseudo.r2)) %>% 
+  pp_df()
 ```
 
 3. Sensitivity Tests
@@ -740,7 +833,7 @@ tpmt_hdl <- tpmt_mm.df %>%
       model0 = map2(model, train, ~update(.x, . ~ 1, data=.y)), # constant only model for pseudo.r2 calc
       preds = map2(model, test, predict, type="response"),
       pseudo.r2 = map2_dbl(model, model0, ~1-logLik(.x)/logLik(.y)),
-      #nrmse = map2_dbl(preds, map(test, resample_get, col_name="td.miles.Transit"), calc_nrmse),
+      nrmse = map2_dbl(preds, map(test, resample_get, col_name="td.miles.Transit"), calc_nrmse),
       rmse = map2_dbl(preds, map(test, resample_get, col_name="td.miles.Transit"), calc_rmse)
       
     ) %>%
@@ -756,9 +849,9 @@ goodness <- tpmt_hdl %>%
             dplyr::select(-c(model, preds))%>%
             group_by(metro) %>%
             summarize(rmse=mean(rmse),
-                      #nrmse=mean(nrmse),
+                      nrmse=mean(nrmse),
                       pseudo.r2=mean(pseudo.r2)) 
-goodness
+goodness %>% pp_df()
 ```
 
 3. sensitivity
@@ -804,7 +897,7 @@ ggplot(plot_df, aes(x=dpmt_int)) +
 fmlas <- list(metro    =~pscl::hurdle(int_round(td.miles.Walk) ~ VehPerDriver+HHSIZE+LIF_CYC+Age0to14+
                                   D3bpo4 + Fwylnmicap+ LogIncome | 
                                   AADVMT + VehPerDriver+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM + D3bmm4 + D3bpo4 +
-                                  log1p(D5ar) + WRKCOUNT + Fwylnmicap + Tranmilescap + LogIncome + D3apo + D4c,
+                                  ACCESS + WRKCOUNT + Fwylnmicap + Tranmilescap + LogIncome + D3apo + D4c,
                           data=.),
               non_metro=~pscl::hurdle(int_round(td.miles.Walk) ~  HHSIZE+LIF_CYC+D3apo + LogIncome | 
                                   AADVMT + VehPerDriver+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM  +
@@ -840,7 +933,7 @@ goodness <- wpmt_hdl %>%
             summarize(rmse=mean(rmse),
                       #nrmse=mean(nrmse),
                       pseudo.r2=mean(pseudo.r2)) 
-goodness
+goodness %>% pp_df()
 ```
 
 3. sensitivity
@@ -1006,7 +1099,7 @@ goodness <- ttf_lm %>%
             summarize(rmse=mean(rmse),
                       #nrmse=mean(nrmse),
                       pseudo.r2=mean(pseudo.r2)) 
-goodness
+goodness %>% pp_df()
 ```
 
 3. sensitivity 
@@ -1040,12 +1133,12 @@ ggplot(plot_df, aes(x=ttf)) +
 ```{r}
 
 fmlas <- list(metro    =~pscl::hurdle(ntrips.Walk ~ AADVMT + VehPerDriver+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM + D3bmm4 + D3bpo4 +
-                                  log1p(D5ar) + Fwylnmicap + Tranmilescap + LogIncome + D3apo + D4c | 
+                                  ACCESS + Fwylnmicap + Tranmilescap + LogIncome + D3apo + D4c | 
                                   AADVMT + VehPerDriver+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM + D3bmm4 + D3bpo4 +
-                                  log1p(D5ar) + WRKCOUNT + Fwylnmicap + Tranmilescap + LogIncome + D3apo + D4c,
+                                  ACCESS + WRKCOUNT + Fwylnmicap + Tranmilescap + LogIncome + D3apo + D4c,
                              data=., na.action=na.omit),
               non_metro=~pscl::hurdle(ntrips.Walk ~  AADVMT + VehPerDriver+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM + D3bpo4 +
-                                  log1p(D5ar) + WRKCOUNT + LogIncome | 
+                                  ACCESS + WRKCOUNT + LogIncome | 
                                   AADVMT + VehPerDriver + HHSIZE + LIF_CYC + Age0to14 + D1D + D2A_EPHHM + D3bpo4 +
                                   WRKCOUNT + LogIncome + D3apo,
                               data=., na.action=na.omit))
@@ -1081,7 +1174,7 @@ goodness <- wlktf_lm %>%
             summarize(rmse=mean(rmse),
                       #nrmse=mean(nrmse),
                       pseudo.r2=mean(pseudo.r2)) 
-goodness
+goodness %>% pp_df()
 ```
 
 3. sensitivity 
@@ -1119,9 +1212,9 @@ fmlas <- list(metro    =~pscl::hurdle(ntrips.Bike ~ AADVMT + Age0to14 + Age65Plu
                                   WRKCOUNT + Fwylnmicap + Tranmilescap + LogIncome,
                              data=., na.action=na.omit),
               non_metro=~pscl::hurdle(ntrips.Bike ~  AADVMT + VehPerDriver + HHSIZE + LIF_CYC + Age0to14 + Age65Plus + D1D + 
-                                  log1p(D5ar) + WRKCOUNT + LogIncome + D3apo |
+                                  ACCESS + WRKCOUNT + LogIncome + D3apo |
                                   AADVMT + VehPerDriver + LIF_CYC + Age0to14 + Age65Plus + D1A + D2A_EPHHM + 
-                                  log1p(D5ar) + WRKCOUNT + LogIncome + D3apo,
+                                  ACCESS + WRKCOUNT + LogIncome + D3apo,
                               data=., na.action=na.omit))
 
 bktf_lm <- mm.df %>%
@@ -1145,7 +1238,6 @@ bktf_lm <- mm.df %>%
     I() #name_list.cols()
   
 bktf_lm$model %>% map(summary)
-  
 ```
 
 2 validation 
@@ -1156,7 +1248,7 @@ goodness <- bktf_lm %>%
             summarize(rmse=mean(rmse),
                       #nrmse=mean(nrmse),
                       pseudo.r2=mean(pseudo.r2)) 
-goodness
+goodness %>% pp_df()
 ```
 
 3. sensitivity 
@@ -1201,13 +1293,13 @@ ggplot(plot_df, aes(x=pow_tadt)) +
 
 1. estimated Parameters
 
-```{r}
+```{r, results="asis"}
 
 fmlas <- list(metro    =~lm(I((td.miles.Transit)^0.24) ~ log1p(AADVMT) + log1p(VehPerDriver)+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM + D3bmm4 + D3bpo4 +
-                                  log1p(D5ar) + WRKCOUNT + Fwylnmicap + Tranmilescap + Tranmilescap:D4c + LogIncome + D3apo + D4c,
+                                  ACCESS + WRKCOUNT + Fwylnmicap + Tranmilescap + Tranmilescap:D4c + LogIncome + D3apo + D4c,
                              data=., na.action=na.omit),
               non_metro=~lm(I((td.miles.Transit)^0.24) ~  log1p(AADVMT) + log1p(VehPerDriver)+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM + 
-                                  log1p(D5ar) + WRKCOUNT + LogIncome + D3apo,
+                                  ACCESS + WRKCOUNT + LogIncome + D3apo,
                               data=., na.action=na.omit))
 
 inv_fun <- function(x, pow1=0.24) x^(1/pow1)  
@@ -1222,15 +1314,20 @@ tatd_lm <- mm.df %>%
       #pseudo.r2 = map_dbl(model, calc_pseudo.r2),
       #pseudo.r2 = map_dbl(model, pspR2),
       r2 = map_dbl(map(model, summary), "r.squared"),
-      #nrmse = map2_dbl(preds, map(test, resample_get, col_name="td.miles.Transit"), calc_nrmse),
+      nrmse = map2_dbl(preds, map(test, resample_get, col_name="td.miles.Transit"), calc_nrmse),
       rmse = map2_dbl(preds, map(test, resample_get, col_name="atd.miles.Transit"), calc_rmse)
       #rmse = map2_dbl(model, test, modelr::rmse)
     ) %>%
     dplyr::select(-c(test, train)) %>%
     I() #name_list.cols()
-  
-tatd_lm$model %>% map(summary)
-  
+
+tatd_lm$post_func <- list(inv_fun)
+
+#tatd_lm$model %>% map(summary)
+model_labels <- str_replace(tatd_lm$metro, "[_]", "")
+tight_stargazer(tatd_lm$model, column.labels = model_labels, 
+                model.numbers=T, 
+                title="Power-transformed Regression Models of Average Transit Trip Length")
 ```
 
 2. validation 
@@ -1241,7 +1338,7 @@ goodness <- tatd_lm %>%
             summarize(rmse=mean(rmse),
                       #nrmse=mean(nrmse),
                       r2=mean(r2)) 
-goodness
+goodness %>% pp_df()
 ```
 
 3. sensitivity 
@@ -1280,9 +1377,9 @@ ggplot(plot_df, aes(x=pow_wadt)) +
 
 1. estimated Parameters
 
-```{r}
+```{r, results="asis"}
 fmlas <- list(metro    =~lm(I((td.miles.Walk)^0.10) ~ AADVMT + VehPerDriver+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM + D3bmm4 + D3bpo4 +
-                                  log1p(D5ar) + WRKCOUNT + Fwylnmicap + Tranmilescap + LogIncome + D3apo + D4c,
+                                  ACCESS + WRKCOUNT + Fwylnmicap + Tranmilescap + LogIncome + D3apo + D4c,
                              data=., na.action=na.omit),
               non_metro=~lm(I((td.miles.Walk)^0.10) ~  AADVMT + VehPerDriver+HHSIZE+LIF_CYC+Age0to14+D1D+D2A_EPHHM  +
                                   WRKCOUNT + LogIncome + D3apo,
@@ -1299,7 +1396,7 @@ watd_lm <- mm.df %>%
       #pseudo.r2 = map_dbl(model, calc_pseudo.r2),
       #pseudo.r2 = map_dbl(model, pspR2),
       r2 = map_dbl(map(model, summary), "r.squared"),
-      #nrmse = map2_dbl(preds, map(test, resample_get, col_name="td.miles.Walk"), calc_nrmse),
+      nrmse = map2_dbl(preds, map(test, resample_get, col_name="td.miles.Walk"), calc_nrmse),
       rmse = map2_dbl(preds, map(test, resample_get, col_name="atd.miles.Walk"), calc_rmse)
       
       #rmse = map2_dbl(model, test, modelr::rmse)
@@ -1307,8 +1404,15 @@ watd_lm <- mm.df %>%
     dplyr::select(-c(test, train)) %>%
     I() #name_list.cols()
   
-  watd_lm$model %>% map(summary)
-  
+#watd_lm$model %>% map(summary)
+
+watd_lm$post_func <- list(inv_fun)
+
+model_labels <- str_replace(tatd_lm$metro, "[_]", "")
+tight_stargazer(tatd_lm$model, column.labels = model_labels, 
+                model.numbers=T, 
+                title="Power-transformed Regression Models of Average Walk Trip Length")
+    
 ```
 
 2 validation 
@@ -1319,7 +1423,7 @@ goodness <- watd_lm %>%
             summarize(rmse=mean(rmse),
                       #nrmse=mean(nrmse),
                       r2=mean(r2)) 
-goodness
+goodness %>% pp_df()
 ```
 
 3. sensitivity 
@@ -1357,7 +1461,7 @@ ggplot(plot_df, aes(x=batd)) +
 
 1. estimated Parameters
 
-```{r}
+```{r, results="asis"}
 # LIF_CYC+Age0to14+D3apo | 
 #                                   log1p(VehPerDriver)+HHSIZE+WRKCOUNT+LIF_CYC+Age0to14+D3bpo4+
 #                                   Fwylnmicap+Tranmilescap:D4c+Tranmilescap
@@ -1391,7 +1495,14 @@ batd_lm <- mm.df %>%
     dplyr::select(-c(test, train)) %>%
     I() #name_list.cols()
   
-  batd_lm$model %>% map(summary)
+#batd_lm$model %>% map(summary)
+
+batd_lm$post_func <- list(inv_fun)
+
+model_labels <- str_replace(batd_lm$metro, "[_]", "")
+tight_stargazer(batd_lm$model, column.labels = model_labels, 
+                model.numbers=T, 
+                title="Power-transformed Regression Models of Average Bike Trip Length")
   
 ```
 
@@ -1403,7 +1514,7 @@ goodness <- batd_lm %>%
             summarize(rmse=mean(rmse),
                       #nrmse=mean(nrmse),
                       r2=mean(r2)) 
-goodness
+goodness %>% pp_df()
 ```
 
 3. sensitivity 
@@ -1414,6 +1525,7 @@ out <- test_sensitivity(hh.df, x_col="D1D", model.df=batd_lm, segment_col="metro
 out <- test_sensitivity(hh.df, x_col="UZAEMPDEN", model.df=batd_lm, segment_col="metro", inv_fun=inv_fun)
 out <- test_sensitivity(hh.df, x_col="Tranmilescap", model.df=batd_lm, segment_col="metro", segment="metro", inv_fun=inv_fun)
 ```
+
 ### Considered Model Structures
 
 #### Person Miles Traveled by Mode (PMT) Model
@@ -1475,7 +1587,7 @@ grid.arrange(phist.or.transit, phist.lor.transit,
 ```
 
 
-```{r, include=FALSE, eval=FALSE, results='asis'}
+```{r, include=FALSE, eval=FALSE}
 #stargazer(lor.transit, lor.bike, lor.walk, no.space=TRUE, 
 #          column.labels=c("transit", "bike", "walk"), model.numbers=F, type="html", title="Log-odd-ratio Model")
 
@@ -1494,7 +1606,7 @@ grid.arrange(phist.or.transit, phist.lor.transit,
 #stargazer(lor.bike, no.space=TRUE, type="html")
 ```
 
-```{r, include=FALSE, eval=FALSE, results='asis'}
+```{r, include=FALSE, eval=FALSE}
 #lor.walk <- lm(log1p(odds.ratio) ~ LogIncome + HHSIZE + VehPerDrvAgePop + Age65Plus + Age0to14 + LIF_CYC
 #             + TOTPOP10_1 + EMPTOT_2 + E5_RET10 + E5_SVC10 + D1D
 #              + D2A_JPHH + D3amm + D3apo + D4a + D4c + D4d, data=hht.walk)

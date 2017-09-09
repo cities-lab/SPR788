@@ -1044,6 +1044,12 @@ ggplot(data=ct_results %>% filter(variable=="VMT")) +
   labs(x="Census Tract", y="VMT") +
   theme(axis.text.x=element_blank(),
         axis.ticks.x=element_blank())
+
+ggplot(data=ct_results %>% filter(variable=="VMT")) +
+  geom_line(aes(x=TRACTCE10, y=value, color=source, group=source)) +
+  labs(x="Census Tract", y="VMT") +
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
   
 ```
 
